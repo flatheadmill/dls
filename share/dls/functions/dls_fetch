@@ -1,0 +1,53 @@
+# usage: dls_fetch <normalized-reference>
+#
+# Fetch one secret from 1Password into the server cache. Server side
+# only, parent process only: cache writes in a background child are lost
+# when it exits, so the serve loop resolves secrets before it backgrounds
+# a verb. Expects the _dls_cache and _dls_cache_b64 associative arrays
+# and the _dls_masks array declared by `dls serve` in the dynamic scope.
+# The reference must already be normalized by `dls_ref`. Does NOT sign
+# out of op; the caller owns the session so that a batch of fetches can
+# ride one biometric authorization. Sets REPLY to an error message on
+# failure.
+#
+# SAFETY The secret transits the standard out of `op read` into a coproc
+# pipe by way of `pocket`, then lives only in server memory. No temp
+# files, no argv, no environment, no here-strings — a zsh here-string is
+# a temp file.
+
+emulate -L zsh
+
+typeset _dls_reference=${1:-} _dls_out _dls_err
+
+[[ -v _dls_cache ]] || {
+    REPLY='dls_fetch: no cache in scope: dls_fetch is server side only'
+    return 69
+}
+
+if ! pocket _dls_out _dls_err op read --no-newline -- $_dls_reference; then
+    case $_dls_err in
+    (*'not currently signed in'*)
+        REPLY="dls: op not signed in: authorization refused or timed out reading $_dls_reference"
+        ;;
+    (*"isn't a vault"*)
+        REPLY="dls: no such vault: $_dls_reference"
+        ;;
+    (*"isn't an item"*)
+        REPLY="dls: no such item: $_dls_reference"
+        ;;
+    (*"isn't a field"*)
+        REPLY="dls: no such field: $_dls_reference"
+        ;;
+    (*)
+        REPLY="dls: op read failed: $_dls_reference: ${${(f)_dls_err}[1]:-unknown error}"
+        ;;
+    esac
+    return 1
+fi
+
+_dls_cache[$_dls_reference]=$_dls_out
+# Mask the base64 form of the value as well. The tr strips the line wrap
+# GNU base64 adds so the mask stays a single matchable string.
+_dls_cache_b64[$_dls_reference]=$(printf '%s' $_dls_out | base64 | tr -d '\n')
+_dls_masks=( "${(@v)_dls_cache}" "${(@v)_dls_cache_b64}" )
+return 0

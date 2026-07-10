@@ -1,0 +1,90 @@
+# usage: dls_call <kind> <name> <words...>
+#
+#     dls_call verb gh pr list
+#     dls_call ctl status
+#
+# Send one request to the dls server and stream its response. The client
+# creates a pair of fifos and sends their paths with the request; the
+# server runs the verb in the background with standard out and standard
+# error connected to the fifos and is immediately ready for the next
+# client. Output streams through the fifos in real time, so long running
+# verbs neither block the server nor buffer in memory.
+#
+# The request is a single line of ${(q)} quoted words — ${(q)} renders
+# embedded newlines as $'\n' so the request always fits one line:
+#
+#     <kind> <name> <cwd> <out-fifo> <err-fifo> <args...>
+#
+# We then block on the socket. The connection fd is inherited by the
+# verb's process tree on the server, so end of file means the tree is
+# done, maskers drained and all; the exit record `exit <code>` arrives
+# just before. End of file without an exit record means the server or
+# its wrapper died: we kill our fifo readers — they may be blocked on
+# opens that will never come — and report a protocol error instead of
+# hanging.
+#
+# If we are killed mid-stream our fifo readers die, the verb takes
+# SIGPIPE on its next write, and everything unwinds by pipe semantics;
+# nobody cleans up because nobody has to.
+
+emulate -L zsh
+
+zmodload zsh/net/socket
+
+typeset REPLY
+dls_socket
+typeset _dls_socket=$REPLY
+
+typeset _dls_kind=${1:-} _dls_name=${2:-}
+shift 2
+
+typeset _dls_dir
+_dls_dir=$(mktemp -d ${TMPDIR:-/tmp}/dls.XXXXXX) ||
+    abend -c 74 'fatal: unable to create fifo directory'
+
+integer _dls_code=-1 _dls_out_job=0 _dls_err_job=0
+{
+    mkfifo -m 600 $_dls_dir/out $_dls_dir/err ||
+        abend -c 74 'fatal: unable to create fifos in %s' $_dls_dir
+
+    zsocket $_dls_socket 2>/dev/null ||
+        abend -c 69 'fatal: no dls server: start one with `dls serve` (socket: %s)' $_dls_socket
+    integer _dls_fd=$REPLY
+
+    typeset -a _dls_request=(
+        $_dls_kind $_dls_name $PWD $_dls_dir/out $_dls_dir/err "$@"
+    )
+    print -r -u $_dls_fd -- "${(j: :)${(@q)_dls_request}}"
+
+    cat $_dls_dir/out &
+    _dls_out_job=$!
+    cat $_dls_dir/err >&2 &
+    _dls_err_job=$!
+
+    typeset _dls_response
+    slurp _dls_response <&$_dls_fd
+    exec {_dls_fd}>&-
+
+    typeset -a _dls_words=( "${(@Q)${(z)_dls_response}}" )
+    while (( ${#_dls_words} >= 2 )); do
+        if [[ $_dls_words[1] = exit && $_dls_words[2] = <-> ]]; then
+            _dls_code=$_dls_words[2]
+        fi
+        shift 2 _dls_words
+    done
+
+    if (( _dls_code >= 0 )); then
+        # Normal completion: end of file on the socket means the maskers
+        # have exited and closed the fifos, so the readers are done.
+        wait $_dls_out_job $_dls_err_job
+        _dls_out_job=0 _dls_err_job=0
+    fi
+} always {
+    (( _dls_out_job )) && kill $_dls_out_job 2>/dev/null
+    (( _dls_err_job )) && kill $_dls_err_job 2>/dev/null
+    rm -rf $_dls_dir
+}
+
+(( _dls_code >= 0 )) ||
+    abend -c 70 'fatal: protocol error: no exit status from dls server'
+return $_dls_code

@@ -1,0 +1,61 @@
+#!/usr/bin/env zshctl
+
+zshctl[man_title]='DLS Manuals'
+
+# Configuration shared by client and server. Override in
+# ~/.config/dls/config.zsh, for example:
+#
+#     dls[socket]=$HOME/elsewhere/dls.socket
+#     dls[verb:gh:secret]=op://Infrastructure/github/token
+#
+typeset -gA dls=()
+
+[[ -f ~/.config/dls/config.zsh ]] && source ~/.config/dls/config.zsh
+
+# Resolve the domain socket path into REPLY. Precedence: the DLS_SOCKET
+# environment variable, then dls[socket] from configuration, then a
+# default under the XDG runtime or state directory.
+function dls_socket {
+    REPLY=${DLS_SOCKET:-${dls[socket]:-${XDG_RUNTIME_DIR:-$HOME/.local/state/dls}/dls.socket}}
+}
+
+function :help {
+    heredoc -v help <<'    EOF'
+        # desc
+        broker secrets to sandboxed agents over a domain socket
+        # opt help
+        Display help for `dls`.
+        # man
+        ## DESCRIPTION
+        `dls` brokers secrets to processes that are not allowed to read them.
+
+        A `dls` server runs outside the sandbox holding secrets in memory,
+        fetched from 1Password with `op read` and cached. Clients connect over a
+        Unix domain socket and invoke verbs; the server runs the verb with the
+        secret injected into the child process environment and replays the
+        output. The secret value itself never crosses the socket, never appears
+        on a command line, and never rests in a file.
+
+        Verbs are `zshctl` extension commands. The server loads all command
+        code at startup and never reloads; activating new or edited verb code
+        requires a server restart, which is the human approval gate.
+        ## OPTIONS
+        > options
+        ## COMMANDS
+        You can learn more about each command with the `--help` option.
+        > commands
+    EOF
+}
+
+function :args {
+    eval "$(args -UC -bx h,help -- "$@")"
+}
+
+function :execute {
+    delegate "$@"
+}
+
+function :complete {
+}
+
+# vim: ft=zsh:

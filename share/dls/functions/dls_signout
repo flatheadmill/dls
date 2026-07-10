@@ -1,0 +1,13 @@
+# usage: dls_signout
+#
+# End the 1Password CLI session so that the next `op read` requires a
+# fresh biometric authorization. The signout narrows each authorization
+# to the reads the server just performed — one touch, one batch, cold
+# again. Failure is a warning, not an error: the server keeps serving and
+# the human decides what to do about a session that will not close.
+
+emulate -L zsh
+
+typeset _dls_out _dls_err
+pocket _dls_out _dls_err op signout ||
+    print -r -u 2 -- 'dls: warning: op signout failed; the op session may remain authorized'
