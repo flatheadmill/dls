@@ -1,3 +1,5 @@
+emulate -L zsh
+
 # usage: dls_call <kind> <name> <words...>
 #
 #     dls_call verb gh pr list
@@ -26,8 +28,6 @@
 # If we are killed mid-stream our fifo readers die, the verb takes
 # SIGPIPE on its next write, and everything unwinds by pipe semantics;
 # nobody cleans up because nobody has to.
-
-emulate -L zsh
 
 zmodload zsh/net/socket
 

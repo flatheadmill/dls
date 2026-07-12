@@ -1,3 +1,5 @@
+emulate -L zsh
+
 # usage: dls_fetch <normalized-reference>
 #
 # Fetch one secret from 1Password into the server cache. Server side
@@ -14,8 +16,6 @@
 # pipe by way of `pocket`, then lives only in server memory. No temp
 # files, no argv, no environment, no here-strings — a zsh here-string is
 # a temp file.
-
-emulate -L zsh
 
 typeset _dls_reference=${1:-} _dls_out _dls_err
 
