@@ -46,6 +46,12 @@ function _dls_load_sources {
         src=$zshctl[$key]
         [[ ${src[1]} = / ]] || continue
         source $src || abend 'fatal: unable to source `%s`' $src
+        # This is the line that makes the no-reload invariant above real.
+        # Having sourced the command file once, we overwrite its zshctl entry
+        # (the source path) with ':', a no-op, so zshctl's delegate never
+        # lazily re-sources it on a later call. Drop this and every `dls gh`
+        # re-reads the file from disk, and agent-edited verb code goes live
+        # without a restart — the approval gate, gone.
         zshctl[$key]=':'
         _dls_checksums[$src]="$(cksum < $src)"
     done
@@ -57,6 +63,12 @@ function _dls_load_sources {
     done
 }
 
+# The loaded verbs, for `dls status` and the startup banner. Read the
+# expansion inside out: (@k)functions is every defined function name;
+# (M)...:#dls:verb:* keeps only the ones matching dls:verb:* — with the M flag
+# the :# operator keeps matches instead of removing them, which is the bit that
+# reads backwards; #dls:verb: strips the prefix from each; (o) sorts. Net:
+# every dls:verb:<name>, reduced to <name>, in order.
 function _dls_verbs {
     reply=( ${(o)${${(M)${(@k)functions}:#dls:verb:*}#dls:verb:}} )
 }
@@ -68,6 +80,13 @@ function _dls_verbs {
 # the output.
 function _dls_mask {
     typeset _dls_line _dls_value
+    # The read/print split keeps the stream byte-faithful: a masked stream must
+    # match what the verb wrote except for the concealed secrets, newlines and
+    # all. `read` returns nonzero on a final line with no trailing newline, and
+    # that sets _dls_eof; that last line is emitted with print -rn so we never
+    # invent a newline the verb did not write, while every earlier line gets its
+    # newline back with print -r. A clean EOF — read failed and the line is
+    # empty — emits nothing, so no spurious blank line is appended.
     integer _dls_eof=0
     while (( ! _dls_eof )); do
         IFS= read -r _dls_line || _dls_eof=1

@@ -10,6 +10,11 @@ emulate -L zsh
 
 typeset _dls_reference=${1:-}
 [[ $_dls_reference = op://* ]] || _dls_reference=op://$_dls_reference
+# Three segments is deliberate, and it already covers the four-segment section
+# form op://vault/item/section/field: the trailing ?* is greedy and swallows
+# section/field whole. Do not "fix" this to op://?*/?*/?*/?* to allow a section
+# — that would forbid the common op://vault/item/field. Each ?* also demands at
+# least one character, so empty segments are rejected.
 if [[ $_dls_reference != op://?*/?*/?* ]]; then
     REPLY=''
     return 1
