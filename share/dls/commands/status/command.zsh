@@ -7,5 +7,5 @@ function :args:status {
 }
 
 function :execute:status {
-    dls_call ctl status "$@"
+    dls_control "$@"
 }

@@ -5,7 +5,7 @@ emulate -L zsh
 # Fetch one secret from 1Password into the server cache. Server side
 # only, parent process only: cache writes in a background child are lost
 # when it exits, so the serve loop resolves secrets before it backgrounds
-# a verb. Expects the _dls_cache and _dls_cache_b64 associative arrays
+# a command. Expects the _dls_cache and _dls_cache_b64 associative arrays
 # and the _dls_masks array declared by `dls serve` in the dynamic scope.
 # The reference must already be normalized by `dls_ref`. Does NOT sign
 # out of op; the caller owns the session so that a batch of fetches can

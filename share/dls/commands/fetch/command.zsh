@@ -7,5 +7,5 @@ function :args:fetch {
 }
 
 function :execute:fetch {
-    dls_call ctl fetch "$@"
+    dls_control "$@"
 }

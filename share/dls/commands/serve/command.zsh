@@ -1,4 +1,4 @@
-# The dls server: a Unix domain socket accept loop that runs verbs in
+# The dls server: a Unix domain socket accept loop that runs commands in
 # background process trees and streams their output through client
 # provided fifos.
 #
@@ -7,15 +7,15 @@
 #
 #     <kind> <name> <cwd> <out-fifo> <err-fifo> <args...>
 #
-# where kind is `verb` or `ctl`. The response is the exit status,
-# written to the connection as `exit <code>` when the verb finishes.
-# The connection fd is inherited by the verb's process tree, so the
+# where kind is `execute` or `control`. The response is the exit status,
+# written to the connection as `exit <code>` when the command finishes.
+# The connection fd is inherited by the command's process tree, so the
 # client's end of the socket reaches end of file exactly when the tree
 # is done — the kernel is the completion signal. A crashed server or
 # wrapper reads as end of file without an exit record, which the client
 # reports as a protocol error instead of hanging.
 #
-# Output never crosses the socket. The verb's standard out and standard
+# Output never crosses the socket. The command's standard out and standard
 # error stream through the fifos, masked line by line against every
 # cached secret value. The server touches both fifos exactly once per
 # request, error paths included, so client readers always terminate.
@@ -34,7 +34,7 @@ function :args:serve {
 
 # INVARIANT No hot reload. Every line of command code is loaded here,
 # once, at startup, and its checksum recorded for `dls status` to report
-# drift. A verb written or edited after the server starts is inert until
+# drift. A command written or edited after the server starts is inert until
 # a human restarts the server; the restart is the approval gate through
 # which agent authored code gains access to secrets. Do not add
 # convenience reloading; it deletes the security property.
@@ -50,7 +50,7 @@ function _dls_load_sources {
         # Having sourced the command file once, we overwrite its zshctl entry
         # (the source path) with ':', a no-op, so zshctl's delegate never
         # lazily re-sources it on a later call. Drop this and every `dls gh`
-        # re-reads the file from disk, and agent-edited verb code goes live
+        # re-reads the file from disk, and agent-edited command code goes live
         # without a restart — the approval gate, gone.
         zshctl[$key]=':'
         _dls_checksums[$src]="$(cksum < $src)"
@@ -63,14 +63,14 @@ function _dls_load_sources {
     done
 }
 
-# The loaded verbs, for `dls status` and the startup banner. Read the
+# The loaded commands, for `dls status` and the startup banner. Read the
 # expansion inside out: (@k)functions is every defined function name;
-# (M)...:#dls:verb:* keeps only the ones matching dls:verb:* — with the M flag
+# (M)...:#:dls:* keeps only the ones matching :dls:* — with the M flag
 # the :# operator keeps matches instead of removing them, which is the bit that
-# reads backwards; #dls:verb: strips the prefix from each; (o) sorts. Net:
-# every dls:verb:<name>, reduced to <name>, in order.
-function _dls_verbs {
-    reply=( ${(o)${${(M)${(@k)functions}:#dls:verb:*}#dls:verb:}} )
+# reads backwards; #:dls: strips the prefix from each; (o) sorts. Net:
+# every :dls:<name>, reduced to <name>, in order.
+function _dls_commands {
+    reply=( ${(o)${${(M)${(@k)functions}:#:dls:*}#:dls:}} )
 }
 
 # Line oriented masking filter. Replaces every cached secret value and
@@ -81,10 +81,10 @@ function _dls_verbs {
 function _dls_mask {
     typeset _dls_line _dls_value
     # The read/print split keeps the stream byte-faithful: a masked stream must
-    # match what the verb wrote except for the concealed secrets, newlines and
+    # match what the command wrote except for the concealed secrets, newlines and
     # all. `read` returns nonzero on a final line with no trailing newline, and
     # that sets _dls_eof; that last line is emitted with print -rn so we never
-    # invent a newline the verb did not write, while every earlier line gets its
+    # invent a newline the command did not write, while every earlier line gets its
     # newline back with print -r. A clean EOF — read failed and the line is
     # empty — emits nothing, so no spurious blank line is appended.
     integer _dls_eof=0
@@ -104,7 +104,7 @@ function _dls_mask {
     return 0
 }
 
-# Answer a request without running a verb: write the texts to the fifos
+# Answer a request without running a command: write the texts to the fifos
 # and the exit record to the connection. Backgrounded so a client that
 # died before opening its fifos wedges a disposable subshell, never the
 # server.
@@ -119,23 +119,23 @@ function _dls_reply {
     ) &!
 }
 
-# Run a verb in a background process tree and return to the accept loop
+# Run a command in a background process tree and return to the accept loop
 # immediately. Both streams mask through plain pipeline stages — no
 # coprocs, whose children hold copies of their own pipes and must be
 # coaxed into seeing end of file. The fd swap: inside the inner group
-# the verb's standard error becomes the inner pipe to the err masker,
+# the command's standard error becomes the inner pipe to the err masker,
 # and its standard out becomes fd 3, which the outer pipeline carries to
 # the out masker. no_multios is load bearing: with multios on, the
 # second redirection of standard out would tee into both pipes instead
 # of replacing.
 #
-# The verb runs in its own subshell so that an exit or abend in verb
+# The command runs in its own subshell so that an exit or abend in command
 # code cannot skip the exit record, which its group prints to the
 # inherited connection. The client may see the record before the fifos
 # drain; it keeps reading until the connection reaches end of file,
 # which the kernel delivers when the last fork here exits — maskers
 # included.
-function _dls_run_verb {
+function _dls_run_execute {
     integer conn=$1
     typeset name=$2 cwd=$3 out=$4 err=$5
     shift 5
@@ -150,37 +150,37 @@ function _dls_run_verb {
         [[ -n $cwd && -d $cwd ]] && builtin cd -q -- $cwd
         {
             {
-                ( "dls:verb:$name" "$@" )
+                ( ":dls:${name}" "$@" )
                 print -r -u $report -- "exit $?" 2>/dev/null
             } 2>&1 1>&3 | _dls_mask > $err
         } 3>&1 | _dls_mask > $out
     ) &!
 }
 
-function _dls_handle_verb {
+function _dls_handle_execute {
     integer conn=$1
     typeset name=$2 cwd=$3 out=$4 err=$5
     shift 5
-    if (( ! ${+functions[dls:verb:$name]} )); then
+    if (( ! ${+functions[:dls:${name}]} )); then
         _dls_reply $conn "$out" "$err" 66 '' \
-            "dls: no such verb ${(qqq)name}: new verb code requires a server restart"$'\n'
+            "dls: no such command ${(qqq)name}: new command code requires a server restart"$'\n'
         return
     fi
     # Declarative denial, checked before any secret is touched. The
-    # pattern in dls[verb:<name>:deny] is matched against the first non
+    # pattern in dls[<name>:deny] is matched against the first non
     # flag argument. Best effort: `gh -R owner/repo auth` slips by; the
     # threat is accident, not adversary.
     # ${name} is braced in every subscript in this file: a bare $name
     # followed by a colon invites zsh's history-style modifiers — $name:s
     # is the substitute modifier and silently mangles the key, while
     # $name:d happens not to parse as one. Rely on neither.
-    typeset deny=${dls[verb:${name}:deny]:-} arg
+    typeset deny=${dls[${name}:deny]:-} arg
     if [[ -n $deny ]]; then
         for arg in "$@"; do
             [[ $arg = -* ]] && continue
             if [[ $arg = ${~deny} ]]; then
                 _dls_reply $conn "$out" "$err" 77 '' \
-                    "dls: denied: \`$name $arg\` is blocked by dls[verb:${name}:deny]"$'\n'
+                    "dls: denied: \`$name $arg\` is blocked by dls[${name}:deny]"$'\n'
                 return
             fi
             break
@@ -191,17 +191,17 @@ function _dls_handle_verb {
     # authorization on every call. Resolution serializes fingerprint
     # prompts as a side effect, which is what a prompt deserves.
     typeset dls_verb_secret='' REPLY=''
-    if [[ -n ${dls[verb:${name}:secret]:-} ]]; then
-        if ! dls_secret dls_verb_secret ${dls[verb:${name}:secret]}; then
+    if [[ -n ${dls[${name}:secret]:-} ]]; then
+        if ! dls_secret dls_verb_secret ${dls[${name}:secret]}; then
             _dls_reply $conn "$out" "$err" 69 '' \
                 "${REPLY:-dls: unable to resolve secret}"$'\n'
             return
         fi
     fi
-    _dls_run_verb $conn "$name" "$cwd" "$out" "$err" "$@"
+    _dls_run_execute $conn "$name" "$cwd" "$out" "$err" "$@"
 }
 
-function _dls_ctl_fetch {
+function _dls_control_fetch {
     integer conn=$1
     typeset out=$2 err=$3
     shift 3
@@ -241,7 +241,7 @@ function _dls_ctl_fetch {
     _dls_reply $conn "$out" "$err" $(( failures != 0 )) "$outtext" "$errtext"
 }
 
-function _dls_ctl_clear {
+function _dls_control_clear {
     integer conn=$1
     typeset out=$2 err=$3
     shift 3
@@ -280,13 +280,13 @@ function _dls_status_report {
             changed+=( $file )
         fi
     done
-    _dls_verbs
+    _dls_commands
     strftime -s ts '%Y-%m-%dT%H:%M:%S' $_dls_started
     text="dls server"$'\n'
     text+="  socket: $_dls_socket_path"$'\n'
     text+="  pid: $sysparams[pid]"$'\n'
     text+="  started: $ts"$'\n'
-    text+="  verbs: ${${(j:, :)reply}:-(none)}"$'\n'
+    text+="  commands: ${${(j:, :)reply}:-(none)}"$'\n'
     text+="  cached: ${${(j:, :)${(ok)_dls_cache}}:-(none)}"$'\n'
     text+="  sources: ${#_dls_checksums} files loaded"$'\n'
     for file in "${(@)changed}"; do
@@ -298,7 +298,7 @@ function _dls_status_report {
     REPLY=$text
 }
 
-function _dls_handle_ctl {
+function _dls_handle_control {
     integer conn=$1
     typeset op=$2 out=$3 err=$4
     shift 4
@@ -312,10 +312,10 @@ function _dls_handle_ctl {
         _dls_reply $conn "$out" "$err" 0 $REPLY ''
         ;;
     (fetch)
-        _dls_ctl_fetch $conn "$out" "$err" "$@"
+        _dls_control_fetch $conn "$out" "$err" "$@"
         ;;
     (clear)
-        _dls_ctl_clear $conn "$out" "$err" "$@"
+        _dls_control_clear $conn "$out" "$err" "$@"
         ;;
     (stop)
         _dls_running=0
@@ -341,11 +341,11 @@ function _dls_handle {
     typeset out=$request[4] err=$request[5]
     typeset -a args=( "${(@)request[6,-1]}" )
     case $kind in
-    (verb)
-        _dls_handle_verb $conn "$name" "$cwd" "$out" "$err" "${(@)args}"
+    (execute)
+        _dls_handle_execute $conn "$name" "$cwd" "$out" "$err" "${(@)args}"
         ;;
-    (ctl)
-        _dls_handle_ctl $conn "$name" "$out" "$err" "${(@)args}"
+    (control)
+        _dls_handle_control $conn "$name" "$out" "$err" "${(@)args}"
         ;;
     (*)
         _dls_reply $conn "$out" "$err" 64 '' \
@@ -403,9 +403,9 @@ function :execute:serve {
     trap '' PIPE
     trap '_dls_running=0' INT TERM
 
-    _dls_verbs
+    _dls_commands
     print -r -- "dls: serving on $_dls_socket_path"
-    print -r -- "dls: verbs: ${${(j:, :)reply}:-(none)}"
+    print -r -- "dls: commands: ${${(j:, :)reply}:-(none)}"
     print -r -- "dls: sources: ${#_dls_checksums} files loaded; code edits require a restart"
 
     integer conn

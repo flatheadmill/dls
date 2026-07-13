@@ -2,11 +2,11 @@
 
 # Smoke test for the dls wire protocol and control plane. Exercises
 # everything that does not require a 1Password fingerprint: the streams,
-# exit code propagation, verb denial, invalid references, cache clear,
+# exit code propagation, command denial, invalid references, cache clear,
 # status and stop. The op read path and the signout re-prompt must be
 # verified by a human with a finger.
 #
-# The test runs against an isolated HOME so it can inject a test verb as
+# The test runs against an isolated HOME so it can inject a test command as
 # a real zshctl extension and cannot see the operator's configuration.
 
 emulate -L zsh
@@ -43,7 +43,7 @@ function assert_code {
     fi
 }
 
-# Inject a secretless test verb as a zshctl extension in the isolated
+# Inject a secretless test command as a zshctl extension in the isolated
 # HOME. It exercises the full streaming path: both streams, arguments,
 # and a non-zero exit code.
 mkdir -p $home/.local/share/dls/extensions/smoke/commands/test-echo
@@ -59,10 +59,10 @@ function :args:test-echo {
 }
 
 function :execute:test-echo {
-    dls_call verb test-echo "$@"
+    dls_execute "$@"
 }
 
-function dls:verb:test-echo {
+function :dls:test-echo {
     print -r -- "out: $*"
     print -r -u 2 -- "err: $*"
     return 3
@@ -97,7 +97,7 @@ integer server=0
     out=$(dls status 2> $home/err)
     assert_code 'status exits zero' 0 $?
     assert 'status reports the socket' $DLS_SOCKET "$out"
-    assert 'status reports the verbs' 'verbs: gh, test-echo' "$out"
+    assert 'status reports the commands' 'commands: gh, test-echo' "$out"
     assert 'status reports an empty cache' 'cached: (none)' "$out"
 
     out=$(dls test-echo hello world 2> $home/err)

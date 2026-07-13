@@ -6,7 +6,11 @@ zshctl[man_title]='DLS Manuals'
 # ~/.config/dls/config.zsh, for example:
 #
 #     dls[socket]=$HOME/elsewhere/dls.socket
-#     dls[verb:gh:secret]=op://Infrastructure/github/token
+#     dls[gh:secret]=op://Infrastructure/github/token
+#
+# Top-level dls keys never contain a colon. Command keys always do, so
+# command settings such as dls[gh:secret] cannot collide with bare keys
+# such as dls[socket].
 #
 typeset -gA dls=()
 
@@ -31,14 +35,14 @@ function :help {
 
         A `dls` server runs outside the sandbox holding secrets in memory,
         fetched from 1Password with `op read` and cached. Clients connect over a
-        Unix domain socket and invoke verbs; the server runs the verb with the
-        secret injected into the child process environment and replays the
+        Unix domain socket and invoke commands; the server runs the command
+        with the secret injected into the child process environment and replays the
         output. The secret value itself never crosses the socket, never appears
         on a command line, and never rests in a file.
 
-        Verbs are `zshctl` extension commands. The server loads all command
-        code at startup and never reloads; activating new or edited verb code
-        requires a server restart, which is the human approval gate.
+        Each `dls` command is a `zshctl` extension command. The server loads
+        all command code at startup and never reloads; activating new or edited
+        command code requires a server restart, which is the human approval gate.
         ## OPTIONS
         > options
         ## COMMANDS

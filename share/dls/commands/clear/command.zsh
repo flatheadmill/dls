@@ -7,5 +7,5 @@ function :args:clear {
 }
 
 function :execute:clear {
-    dls_call ctl clear "$@"
+    dls_control "$@"
 }

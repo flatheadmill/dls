@@ -11,7 +11,7 @@ touch — and the session is signed out when the batch completes.
 A reference is `vault/item/field` or `op://vault/item/field`. The field
 segment may itself contain a section, `vault/item/section/field`.
 
-Fetching is otherwise lazy: the first verb that needs a secret triggers a
+Fetching is otherwise lazy: the first command that needs a secret triggers a
 fetch and its authorization prompt. Warming the cache after a server restart
 moves the prompt to a moment you chose.
 ## OPTIONS

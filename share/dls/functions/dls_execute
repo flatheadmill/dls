@@ -1,0 +1,5 @@
+emulate -L zsh
+
+typeset REPLY
+_dls_command_name
+_dls_call execute "$REPLY" "$@"

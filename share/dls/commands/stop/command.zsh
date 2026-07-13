@@ -7,5 +7,5 @@ function :args:stop {
 }
 
 function :execute:stop {
-    dls_call ctl stop "$@"
+    dls_control "$@"
 }
