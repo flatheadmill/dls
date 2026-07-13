@@ -150,7 +150,21 @@ function _dls_run_execute {
         [[ -n $cwd && -d $cwd ]] && builtin cd -q -- $cwd
         {
             {
-                ( ":dls:${name}" "$@" )
+                # `report` is a membership badge: zsh {var} fds are not
+                # close-on-exec, so an exec'd or daemonizing command would
+                # inherit the completion wire and could wedge the client on an
+                # EOF that never comes. The command subshell never writes
+                # report — only this enclosing group prints the exit record —
+                # so withhold it from the command tree. The close is inside the
+                # subshell because the trailing `( ... ) {report}>&-` form
+                # parse-errors — {varid} redirection does not work around
+                # subshells. A per-command `{report}>&-` also parses, but the
+                # exec form closes the whole subshell as plain intent, not a
+                # scoped redirection that reads like an accident. Fds 1 and 2
+                # into the maskers remain badges
+                # too, so a daemon that keeps stdio open still hangs, correctly:
+                # it is still attached to our streams.
+                ( exec {report}>&-; ":dls:${name}" "$@" )
                 print -r -u $report -- "exit $?" 2>/dev/null
             } 2>&1 1>&3 | _dls_mask > $err
         } 3>&1 | _dls_mask > $out
