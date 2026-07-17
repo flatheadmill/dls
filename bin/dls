@@ -6,13 +6,9 @@ zshctl[man_title]='DLS Manuals'
 # ~/.config/dls/config.zsh, for example:
 #
 #     dls[socket]=$HOME/elsewhere/dls.socket
-#     dls[gh:secret]=op://Infrastructure/github/token
+#     dls_secrets[gh:token]=op://Infrastructure/github/token
 #
-# Top-level dls keys never contain a colon. Command keys always do, so
-# command settings such as dls[gh:secret] cannot collide with bare keys
-# such as dls[socket].
-#
-typeset -gA dls=()
+typeset -gA dls=() dls_secrets=()
 
 [[ -f ~/.config/dls/config.zsh ]] && source ~/.config/dls/config.zsh
 
@@ -36,9 +32,10 @@ function :help {
         A `dls` server runs outside the sandbox holding secrets in memory,
         fetched from 1Password with `op read` and cached. Clients connect over a
         Unix domain socket and invoke commands; the server runs the command
-        with the secret injected into the child process environment and replays the
-        output. The secret value itself never crosses the socket, never appears
-        on a command line, and never rests in a file.
+        with its configured secrets in a non-exported shell map and replays the
+        output. Command code explicitly places selected values in the environment
+        of the external command that needs them. Secret values never cross the
+        socket, appear on a command line, or rest in a file.
 
         Each `dls` command is a `zshctl` extension command. The server loads
         all command code at startup and never reloads; activating new or edited

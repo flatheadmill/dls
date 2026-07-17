@@ -171,46 +171,81 @@ function _dls_run_execute {
     ) &!
 }
 
+# Resolve every secret configured for a command before its detached process
+# tree starts. Reference validation is a separate first pass so bad command
+# configuration cannot spend a biometric authorization. `$secret` belongs to
+# dls throughout this dynamic-scope path; framework helpers must keep their
+# locals prefixed so they cannot shadow the caller's map.
+function _dls_resolve_secrets {
+    typeset _dls_name=$1 _dls_entry _dls_command _dls_key _dls_reference
+    typeset _dls_failure=''
+    typeset -A _dls_references=()
+    integer _dls_attempted=0 _dls_failed=0
+
+    # Parse on the rightmost colon: command names may themselves contain
+    # colons, while secret keys may not.
+    for _dls_entry in ${(ok)dls_secrets}; do
+        _dls_command=${_dls_entry%:*}
+        _dls_key=${_dls_entry##*:}
+        [[ $_dls_command = "$_dls_name" ]] || continue
+        _dls_reference=${dls_secrets[${_dls_entry}]}
+        if ! dls_ref "$_dls_reference"; then
+            REPLY="dls: invalid secret reference in dls_secrets[${_dls_entry}]: $_dls_reference"
+            return 69
+        fi
+        _dls_references[${_dls_key}]=$REPLY
+    done
+
+    # All references are now known good. Fetch every cold value under one op
+    # authorization, then close that session once; warm-only calls never sign
+    # out. Do not expose a partial map if any fetch fails.
+    {
+        for _dls_key in ${(ok)_dls_references}; do
+            _dls_reference=${_dls_references[${_dls_key}]}
+            (( ${+_dls_cache[${_dls_reference}]} )) && continue
+            (( _dls_attempted++ ))
+            if ! dls_fetch "$_dls_reference"; then
+                _dls_failure="dls: unable to resolve secret reference $_dls_reference for dls_secrets[${_dls_name}:${_dls_key}]: ${${REPLY:-unknown error}#dls: }"
+                _dls_failed=1
+                break
+            fi
+        done
+    } always {
+        (( _dls_attempted )) && dls_signout
+    }
+    if (( _dls_failed )); then
+        REPLY=$_dls_failure
+        return 69
+    fi
+
+    for _dls_key in ${(ok)_dls_references}; do
+        _dls_reference=${_dls_references[${_dls_key}]}
+        secret[${_dls_key}]="${_dls_cache[${_dls_reference}]}"
+    done
+    return 0
+}
+
 function _dls_handle_execute {
     integer conn=$1
     typeset name=$2 cwd=$3 out=$4 err=$5
     shift 5
+    # ${name} is braced wherever a colon follows it: a bare $name invites
+    # zsh's history-style modifiers — $name:s silently mangles the key.
     if (( ! ${+functions[:dls:${name}]} )); then
         _dls_reply $conn "$out" "$err" 66 '' \
             "dls: no such command ${(qqq)name}: new command code requires a server restart"$'\n'
         return
     fi
-    # Declarative denial, checked before any secret is touched. The
-    # pattern in dls[<name>:deny] is matched against the first non
-    # flag argument. Best effort: `gh -R owner/repo auth` slips by; the
-    # threat is accident, not adversary.
-    # ${name} is braced in every subscript in this file: a bare $name
-    # followed by a colon invites zsh's history-style modifiers — $name:s
-    # is the substitute modifier and silently mangles the key, while
-    # $name:d happens not to parse as one. Rely on neither.
-    typeset deny=${dls[${name}:deny]:-} arg
-    if [[ -n $deny ]]; then
-        for arg in "$@"; do
-            [[ $arg = -* ]] && continue
-            if [[ $arg = ${~deny} ]]; then
-                _dls_reply $conn "$out" "$err" 77 '' \
-                    "dls: denied: \`$name $arg\` is blocked by dls[${name}:deny]"$'\n'
-                return
-            fi
-            break
-        done
-    fi
-    # Resolve the secret here in the parent: a cache write in the
+    # Resolve secrets here in the parent: a cache write in the
     # background wrapper would die with it and cost a biometric
     # authorization on every call. Resolution serializes fingerprint
     # prompts as a side effect, which is what a prompt deserves.
-    typeset dls_verb_secret='' REPLY=''
-    if [[ -n ${dls[${name}:secret]:-} ]]; then
-        if ! dls_secret dls_verb_secret ${dls[${name}:secret]}; then
-            _dls_reply $conn "$out" "$err" 69 '' \
-                "${REPLY:-dls: unable to resolve secret}"$'\n'
-            return
-        fi
+    typeset -A secret=()
+    typeset REPLY=''
+    if ! _dls_resolve_secrets "$name"; then
+        _dls_reply $conn "$out" "$err" 69 '' \
+            "${REPLY:-dls: unable to resolve secrets}"$'\n'
+        return
     fi
     _dls_run_execute $conn "$name" "$cwd" "$out" "$err" "$@"
 }
@@ -378,11 +413,29 @@ function :execute:serve {
 
     _dls_load_sources
 
+    # Configuration is admitted at the same restart gate as command code.
+    # Reject a malformed secrets table before the server binds its socket;
+    # surfacing this later as a command failure would blame the caller for an
+    # operator configuration error.
+    typeset _dls_entry _dls_command _dls_key
+    for _dls_entry in ${(ok)dls_secrets}; do
+        if [[ $_dls_entry != *:* ]]; then
+            abend 'fatal: invalid dls_secrets key %s: expected <command>:<secret-key>' \
+                ${(qqq)_dls_entry}
+        fi
+        _dls_command=${_dls_entry%:*}
+        _dls_key=${_dls_entry##*:}
+        if [[ -z $_dls_command || -z $_dls_key ]]; then
+            abend 'fatal: invalid dls_secrets key %s: command and secret key must be nonempty' \
+                ${(qqq)_dls_entry}
+        fi
+    done
+
     # Belt and suspenders for the no-reload invariant: force the
     # function libraries we depend on to resolve now, not lazily from
     # disk on first use after an agent may have edited them.
     typeset name
-    for name in pocket slurp tactac warn dls_ref dls_fetch dls_signout dls_secret; do
+    for name in pocket slurp tactac warn dls_ref dls_fetch dls_signout; do
         autoload -zU +X $name 2>/dev/null
     done
 

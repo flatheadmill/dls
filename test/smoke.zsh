@@ -2,7 +2,7 @@
 
 # Smoke test for the dls wire protocol and control plane. Exercises
 # everything that does not require a 1Password fingerprint: the streams,
-# exit code propagation, command denial, invalid references, cache clear,
+# exit code propagation, command refusal, invalid references, cache clear,
 # status and stop. The op read path and the signout re-prompt must be
 # verified by a human with a finger.
 #
@@ -19,6 +19,16 @@ typeset home
 home=$(mktemp -d ${TMPDIR:-/tmp}/dls.smoke.XXXXXX) || exit 1
 
 integer failures=0
+
+# This suite owns its failure path. Never let a machine's live 1Password
+# integration turn an expected resolution failure into a biometric prompt.
+mkdir -p $home/bin
+cat > $home/bin/op <<'EOF'
+#!/usr/bin/env zsh
+exit 1
+EOF
+chmod +x $home/bin/op
+export PATH=$home/bin:$PATH
 
 function assert {
     typeset name=$1 expected=$2 actual=$3
@@ -63,6 +73,10 @@ function :execute:test-echo {
 }
 
 function :dls:test-echo {
+    if [[ ${1:-} = refuse ]]; then
+        print -r -u 2 -- 'dls: test-echo refuses this request'
+        return 77
+    fi
     print -r -- "out: $*"
     print -r -u 2 -- "err: $*"
     return 3
@@ -74,6 +88,27 @@ export DLS_SOCKET=$home/dls.socket
 function dls {
     HOME=$home $zshctl $root/bin/dls "$@"
 }
+
+# Malformed secret-table structure is an operator configuration error and must
+# fail at the restart gate, before a socket exists for an agent to call.
+typeset malformed_home=$home/malformed-home
+typeset malformed_socket=$home/malformed.socket
+mkdir -p $malformed_home/.config/dls
+cat > $malformed_home/.config/dls/config.zsh <<'EOF'
+dls_secrets[badkey]=op://Private/item/field
+EOF
+typeset malformed_out
+malformed_out=$(HOME=$malformed_home DLS_SOCKET=$malformed_socket \
+    $zshctl $root/bin/dls serve 2>&1)
+integer malformed_code=$?
+assert_code 'malformed secrets key refuses startup' 1 $malformed_code
+assert 'malformed secrets key is named' 'badkey' "$malformed_out"
+if [[ ! -e $malformed_socket ]]; then
+    print -r -- 'ok: malformed secrets key never binds'
+else
+    print -r -- 'FAIL: malformed secrets key bound a socket'
+    (( failures++ ))
+fi
 
 integer server=0
 {
@@ -113,11 +148,17 @@ integer server=0
         (( failures++ ))
     fi
 
+    out=$(dls test-echo refuse 2> $home/err)
+    code=$?
+    err=$(<$home/err)
+    assert_code 'in-command refusal exits 77' 77 $code
+    assert 'in-command refusal explains itself' 'test-echo refuses this request' "$err"
+
     out=$(dls gh auth token 2> $home/err)
     code=$?
     err=$(<$home/err)
-    assert_code 'gh auth is denied' 77 $code
-    assert 'gh auth denial names the gate' 'denied' "$err"
+    assert_code 'gh auth fails unresolved' 69 $code
+    assert 'gh auth names the resolution failure' 'unable to resolve secret reference' "$err"
 
     out=$(dls gh 2> $home/err)
     code=$?
