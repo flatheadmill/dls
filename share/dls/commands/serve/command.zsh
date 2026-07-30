@@ -9,11 +9,13 @@
 #
 # where kind is `execute` or `control`. The response is the exit status,
 # written to the connection as `exit <code>` when the command finishes.
-# The connection fd is inherited by the command's process tree, so the
-# client's end of the socket reaches end of file exactly when the tree
-# is done — the kernel is the completion signal. A crashed server or
-# wrapper reads as end of file without an exit record, which the client
-# reports as a protocol error instead of hanging.
+# The background wrapper and maskers retain the connection fd, but the
+# command tree does not. The client's end reaches end of file when that
+# shell island is done and both output streams have drained. A detached
+# descendant may outlive the request once it has released every output
+# endpoint. A crashed server or wrapper reads as end of file without an
+# exit record, which the client reports as a protocol error instead of
+# hanging.
 #
 # Output never crosses the socket. The command's standard out and standard
 # error stream through the fifos, masked line by line against every
@@ -125,9 +127,10 @@ function _dls_reply {
 # coaxed into seeing end of file. The fd swap: inside the inner group
 # the command's standard error becomes the inner pipe to the err masker,
 # and its standard out becomes fd 3, which the outer pipeline carries to
-# the out masker. no_multios is load bearing: with multios on, the
-# second redirection of standard out would tee into both pipes instead
-# of replacing.
+# the out masker. Once fd 3 is copied back onto standard out, the inner
+# group closes that temporary duplicate before running command code.
+# no_multios is load bearing: with multios on, the second redirection of
+# standard out would tee into both pipes instead of replacing.
 #
 # The command runs in its own subshell so that an exit or abend in command
 # code cannot skip the exit record, which its group prints to the
@@ -160,13 +163,17 @@ function _dls_run_execute {
                 # parse-errors — {varid} redirection does not work around
                 # subshells. A per-command `{report}>&-` also parses, but the
                 # exec form closes the whole subshell as plain intent, not a
-                # scoped redirection that reads like an accident. Fds 1 and 2
-                # into the maskers remain badges
-                # too, so a daemon that keeps stdio open still hangs, correctly:
-                # it is still attached to our streams.
+                # scoped redirection that reads like an accident.
+                #
+                # Fd 3 is different: it is temporary pipeline scaffolding, a
+                # duplicate of standard out that command code must not inherit.
+                # The inner group's `1>&3 3>&-` consumes it at the plumbing
+                # boundary after restoring standard out. Fds 1 and 2 remain
+                # output badges, so a daemon that keeps either open still hangs,
+                # correctly: it is still attached to one of our streams.
                 ( exec {report}>&-; ":dls:${name}" "$@" )
                 print -r -u $report -- "exit $?" 2>/dev/null
-            } 2>&1 1>&3 | _dls_mask > $err
+            } 2>&1 1>&3 3>&- | _dls_mask > $err
         } 3>&1 | _dls_mask > $out
     ) &!
 }

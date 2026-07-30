@@ -10,6 +10,7 @@
 # a real zshctl extension and cannot see the operator's configuration.
 
 emulate -L zsh
+zmodload zsh/datetime
 
 typeset root=${ZSH_ARGZERO:A:h:h}
 typeset zshctl=${ZSHCTL:-$(command -v zshctl)}
@@ -76,6 +77,23 @@ function :dls:test-echo {
     if [[ ${1:-} = refuse ]]; then
         print -r -u 2 -- 'dls: test-echo refuses this request'
         return 77
+    fi
+    if [[ ${1:-} = detach ]]; then
+        # A detached child that has released the standard three descriptors
+        # no longer belongs to the request. It may outlive the client without
+        # retaining any of the masking pipes.
+        ( exec sleep 4 ) >/dev/null 2>&1 </dev/null &!
+        return 0
+    fi
+    if [[ ${1:-} = detach-fork ]]; then
+        # The same case without the exec. Today the two are identical because
+        # no descriptor here is close-on-exec, so both forms carry whatever the
+        # command tree carries. They would diverge the moment anything is
+        # marked close-on-exec, because an exec'd binary drops such a
+        # descriptor while a forked shell keeps it — so the exec form alone
+        # would stop probing the forked channel. Both are pinned now.
+        ( sleep 4 ) >/dev/null 2>&1 </dev/null &!
+        return 0
     fi
     print -r -- "out: $*"
     print -r -u 2 -- "err: $*"
@@ -147,6 +165,37 @@ integer server=0
         print -r -- 'FAIL: standard error leaked into standard out'
         (( failures++ ))
     fi
+
+    # Round trip time is the oracle here because the property under test is
+    # client liveness. A descriptor census would be more direct and is hostage
+    # to sandboxes and platform restrictions; wall clock is not. The asymmetry
+    # is what makes a timing assertion safe in this one spot: a leaked
+    # completion descriptor holds the client for the child's full lifetime, and
+    # load only ever makes that worse, so a false pass is not reachable. A
+    # false fail needs the healthy round trip, which measures hundredths of a
+    # second, to stall past the threshold — so the threshold is set an order of
+    # magnitude above it, and the child outlives the threshold by as much
+    # again.
+    #
+    # This assertion is not specific to any one descriptor. The child holds
+    # everything it inherited, so reverting the `report` close, or the fd 3
+    # close, or leaking any future scaffolding descriptor into the command tree
+    # all land here as a stalled client.
+    float started elapsed
+    typeset form
+    for form in detach detach-fork; do
+        started=$EPOCHREALTIME
+        out=$(dls test-echo $form 2> $home/err)
+        code=$?
+        elapsed=$(( EPOCHREALTIME - started ))
+        assert_code "$form command exits zero" 0 $code
+        if (( elapsed < 2.0 )); then
+            print -r -- "ok: $form command releases the client"
+        else
+            printf 'FAIL: %s command held the client for %.3fs\n' $form $elapsed
+            (( failures++ ))
+        fi
+    done
 
     out=$(dls test-echo refuse 2> $home/err)
     code=$?

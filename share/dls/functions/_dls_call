@@ -21,13 +21,14 @@ emulate -L zsh
 # new client talking to an old server, or the reverse, will report an
 # unknown request kind until the server is restarted with matching code.
 #
-# We then block on the socket. The connection fd is inherited by the
-# command's process tree on the server, so end of file means the tree is
-# done, maskers drained and all; the exit record `exit <code>` arrives
-# just before. End of file without an exit record means the server or
-# its wrapper died: we kill our fifo readers — they may be blocked on
-# opens that will never come — and report a protocol error instead of
-# hanging.
+# We then block on the socket. The server's background wrapper and maskers
+# retain the connection fd, but the command tree does not. End of file means
+# that shell island is done and both output streams have drained; a detached
+# descendant may outlive the request after releasing every output endpoint.
+# The exit record `exit <code>` arrives just before. End of file without an
+# exit record means the server or its wrapper died: we kill our fifo readers —
+# they may be blocked on opens that will never come — and report a protocol
+# error instead of hanging.
 #
 # If we are killed mid-stream our fifo readers die, the command takes
 # SIGPIPE on its next write, and everything unwinds by pipe semantics;
