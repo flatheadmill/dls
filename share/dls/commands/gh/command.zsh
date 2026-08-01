@@ -15,7 +15,7 @@ function :execute:gh {
 }
 
 # The op reference for the token. Override it in ~/.config/dls/config.zsh.
-: ${dls_secrets[gh:token]:=op://Private/github/token}
+: ${dls_secrets[gh:token]:=Private/github/token}
 
 # SERVER Runs as the forked first stage of the masking pipeline inside a
 # background wrapper: contained, in the client's working directory, with

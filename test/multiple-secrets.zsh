@@ -65,7 +65,12 @@ function :execute:test-secret {
     dls_execute "$@"
 }
 
-: ${dls_secrets[test-secret:alpha]:=op://Vault/item/alpha}
+# Both reference forms, deliberately. The bare form is what the documentation
+# tells an operator to write, so it is the one that must survive the whole path
+# from configuration through normalization to the argument `op read` receives;
+# the prefixed form is what 1Password's own interface hands you when you copy a
+# reference, so it has to keep working too.
+: ${dls_secrets[test-secret:alpha]:=Vault/item/alpha}
 : ${dls_secrets[test-secret:beta]:=op://Vault/item/beta}
 
 function :dls:test-secret {
