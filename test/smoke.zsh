@@ -21,15 +21,62 @@ home=$(mktemp -d ${TMPDIR:-/tmp}/dls.smoke.XXXXXX) || exit 1
 
 integer failures=0
 
+# Keep GitHub CLI's two independent state roots inside the disposable HOME.
+# The production command must replace both; leaving either ambient would make
+# this suite miss an installed alias or extension on a configured machine.
+unset GH_CONFIG_DIR XDG_CONFIG_HOME XDG_DATA_HOME
+
 # This suite owns its failure path. Never let a machine's live 1Password
 # integration turn an expected resolution failure into a biometric prompt.
 mkdir -p $home/bin
 cat > $home/bin/op <<'EOF'
 #!/usr/bin/env zsh
-exit 1
+case $1:${@[-1]} in
+(read:op://Private/github/token)
+    [[ -f $OP_FAKE_STATE ]] || exit 1
+    print -rn -- 'smoke-github-token'
+    ;;
+(signout:*)
+    ;;
+(*)
+    exit 1
+    ;;
+esac
 EOF
 chmod +x $home/bin/op
 export PATH=$home/bin:$PATH
+export OP_FAKE_STATE=$home/op-state
+
+# The boundary fixtures below are real gh registrations, so this suite needs a
+# real gh. Refuse rather than skip: a run that quietly omits the alias and
+# extension assertions would report PASS while proving nothing about the one
+# boundary this command claims, which is worse than not running at all.
+if ! command -v gh > /dev/null 2>&1; then
+    print -r -u 2 -- \
+        'smoke: gh not found; the alias and extension boundary fixtures require it'
+    exit 1
+fi
+
+# Put executable doors in both places GitHub CLI discovers them. These are
+# genuine gh registrations rather than argv lookalikes: before dls supplies
+# sterile state roots, each top-level name runs with GH_TOKEN in its
+# environment and writes it beyond the output masker.
+HOME=$home gh alias set --shell peek \
+    "printf %s \"\$GH_TOKEN\" > $home/gh-alias-loot" || exit 1
+mkdir -p $home/.local/share/gh/extensions/gh-peekext
+cat > $home/.local/share/gh/extensions/gh-peekext/gh-peekext <<EOF
+#!/bin/sh
+printf %s "\$GH_TOKEN" > "$home/gh-extension-loot"
+EOF
+chmod +x $home/.local/share/gh/extensions/gh-peekext/gh-peekext
+
+# Fail at fixture construction, not later with a misleading boundary result,
+# if this installed gh resolves either kind of registration differently.
+HOME=$home GH_TOKEN=fixture gh peek || exit 1
+[[ $(<$home/gh-alias-loot) = fixture ]] || exit 1
+HOME=$home GH_TOKEN=fixture gh peekext || exit 1
+[[ $(<$home/gh-extension-loot) = fixture ]] || exit 1
+rm -f $home/gh-alias-loot $home/gh-extension-loot
 
 function assert {
     typeset name=$1 expected=$2 actual=$3
@@ -203,16 +250,55 @@ integer server=0
     assert_code 'in-command refusal exits 77' 77 $code
     assert 'in-command refusal explains itself' 'test-echo refuses this request' "$err"
 
-    out=$(dls gh auth token 2> $home/err)
-    code=$?
-    err=$(<$home/err)
-    assert_code 'gh auth fails unresolved' 69 $code
-    assert 'gh auth names the resolution failure' 'unable to resolve secret reference' "$err"
-
     out=$(dls gh 2> $home/err)
     code=$?
     err=$(<$home/err)
     assert_code 'unresolvable secret fails' 69 $code
+    assert 'unresolvable secret explains itself' 'unable to resolve secret reference' "$err"
+
+    # Both repository option forms, because they take different numbers of
+    # words as the parser walks past them. The attached form is one step; the
+    # two-token form is the only arm whose miscounting could step over the
+    # family word and hand a refused family through to gh.
+    touch $OP_FAKE_STATE
+    typeset family
+    for family in auth alias extension; do
+        out=$(dls gh --repo=owner/repo $family list 2> $home/err)
+        code=$?
+        err=$(<$home/err)
+        assert_code "gh $family refusal exits 77" 77 $code
+        assert "gh $family refusal explains itself" \
+            "dls: gh $family is blocked" "$err"
+
+        out=$(dls gh -R owner/repo $family list 2> $home/err)
+        code=$?
+        err=$(<$home/err)
+        assert_code "gh $family refusal exits 77 past -R" 77 $code
+    done
+
+    out=$(dls gh peek 2> $home/err)
+    code=$?
+    err=$(<$home/err)
+    assert_code 'configured gh alias is unavailable' 1 $code
+    assert 'configured gh alias reports unknown' 'unknown command "peek"' "$err"
+    if [[ ! -e $home/gh-alias-loot ]]; then
+        print -r -- 'ok: configured gh alias did not receive the token'
+    else
+        print -r -- 'FAIL: configured gh alias received the token'
+        (( failures++ ))
+    fi
+
+    out=$(dls gh peekext 2> $home/err)
+    code=$?
+    err=$(<$home/err)
+    assert_code 'installed gh extension is unavailable' 1 $code
+    assert 'installed gh extension reports unknown' 'unknown command "peekext"' "$err"
+    if [[ ! -e $home/gh-extension-loot ]]; then
+        print -r -- 'ok: installed gh extension did not receive the token'
+    else
+        print -r -- 'FAIL: installed gh extension received the token'
+        (( failures++ ))
+    fi
 
     out=$(dls fetch not-a-reference 2> $home/err)
     code=$?
@@ -222,7 +308,7 @@ integer server=0
 
     out=$(dls clear 2> $home/err)
     assert_code 'clear exits zero' 0 $?
-    assert 'clear reports an empty cache' 'cleared 0' "$out"
+    assert 'clear reports the cached token' 'cleared 1' "$out"
 
     out=$(dls stop 2> $home/err)
     assert_code 'stop exits zero' 0 $?
