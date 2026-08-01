@@ -75,6 +75,19 @@ function _dls_commands {
     reply=( ${(o)${${(M)${(@k)functions}:#:dls:*}#:dls:}} )
 }
 
+# Rebuild the output masks after any cache change. Values are ordered longest
+# first because masking a prefix destroys the longer exact match and exposes
+# its tail. The numeric length prefix gives (On) something to sort; #*: removes
+# only that first prefix, so colons in the value survive untouched.
+function _dls_rebuild_masks {
+    typeset -a _dls_keyed=()
+    typeset _dls_value
+    for _dls_value in "${(@v)_dls_cache}" "${(@v)_dls_cache_b64}"; do
+        _dls_keyed+=( "${#_dls_value}:$_dls_value" )
+    done
+    _dls_masks=( "${(@)${(@On)_dls_keyed}#*:}" )
+}
+
 # Line oriented masking filter. Replaces every cached secret value and
 # its base64 form with a marker. Best effort by design: an exact or
 # base64 occurrence is caught, a laundered one is not. Masks shorter
@@ -321,7 +334,7 @@ function _dls_control_clear {
         _dls_cache=()
         _dls_cache_b64=()
     fi
-    _dls_masks=( "${(@v)_dls_cache}" "${(@v)_dls_cache_b64}" )
+    _dls_rebuild_masks
     _dls_reply $conn "$out" "$err" $(( failures != 0 )) \
         "dls: cleared $cleared; ${#_dls_cache} cached"$'\n' "$errtext"
 }

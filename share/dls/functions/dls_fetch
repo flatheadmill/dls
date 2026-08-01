@@ -6,7 +6,10 @@ emulate -L zsh
 # only, parent process only: cache writes in a background child are lost
 # when it exits, so the serve loop resolves secrets before it backgrounds
 # a command. Expects the _dls_cache and _dls_cache_b64 associative arrays
-# and the _dls_masks array declared by `dls serve` in the dynamic scope.
+# and the _dls_masks array declared by `dls serve` in the dynamic scope,
+# and calls `_dls_rebuild_masks`, which `dls serve` defines — do not go
+# looking for it beside this file, it lives with the server because
+# nothing off the server has a mask list to rebuild.
 # The reference must already be normalized by `dls_ref`. Does NOT sign
 # out of op; the caller owns the session so that a batch of fetches can
 # ride one biometric authorization. Sets REPLY to an error message on
@@ -49,5 +52,5 @@ _dls_cache[$_dls_reference]=$_dls_out
 # Mask the base64 form of the value as well. The tr strips the line wrap
 # GNU base64 adds so the mask stays a single matchable string.
 _dls_cache_b64[$_dls_reference]=$(printf '%s' $_dls_out | base64 | tr -d '\n')
-_dls_masks=( "${(@v)_dls_cache}" "${(@v)_dls_cache_b64}" )
+_dls_rebuild_masks
 return 0

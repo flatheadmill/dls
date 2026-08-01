@@ -27,7 +27,19 @@ function assert {
     fi
 }
 
-# The fake op logs every invocation, serves two references, and accepts
+function assert_absent {
+    typeset name=$1 unexpected=$2 actual=$3
+    if [[ $actual != *$unexpected* ]]; then
+        print -r -- "ok: $name"
+    else
+        print -r -- "FAIL: $name"
+        print -r -- "  unexpected substring: $unexpected"
+        print -r -- "  actual: $actual"
+        (( failures++ ))
+    fi
+}
+
+# The fake op logs every invocation, serves the test references, and accepts
 # signout. It is the successful 1Password boundary this test controls.
 mkdir -p $home/bin
 cat > $home/bin/op <<'EOF'
@@ -36,8 +48,8 @@ print -r -- "$*" >> ${OP_FAKE_LOG:?}
 case $1 in
 (read)
     case ${@[-1]} in
-    (op://Vault/item/alpha) print -rn -- 'alpha-secret-value' ;;
-    (op://Vault/item/beta)  print -rn -- 'beta-secret-value' ;;
+    (op://Vault/item/alpha) print -rn -- 'CANARY' ;;
+    (op://Vault/item/beta)  print -rn -- 'CANARYTAIL9999' ;;
     (*) print -r -u 2 -- "[ERROR] fake op: unknown ref ${@[-1]}"; exit 1 ;;
     esac
     ;;
@@ -77,6 +89,7 @@ function :dls:test-secret {
     print -r -- "alpha-rev: $(print -rn -- $secret[alpha] | rev)"
     print -r -- "beta-len: ${#secret[beta]}"
     print -r -- "raw: $secret[alpha]"
+    print -r -- "raw-long: $secret[beta]"
     PROBE_SECRET=$secret[beta] zsh -c 'print -r -- "child-rev: $(print -rn -- $PROBE_SECRET | rev)"'
     zsh -c '(( ${+secret} )) && print -r -- "child sees secret map" || print -r -- "child sees no secret map"'
     zsh -c '[[ -n ${PROBE_SECRET:-} ]] && print -r -- "prefix leaked past its child" || print -r -- "prefix did not leak"'
@@ -108,10 +121,11 @@ integer server=0
 
     # Cold: two reads, one signout, populated map, masked raw output.
     out=$(dls test-secret 2> $home/err)
-    assert 'alpha reaches the map' 'alpha-rev: eulav-terces-ahpla' "$out"
-    assert 'beta reaches the map' 'beta-len: 17' "$out"
+    assert 'alpha reaches the map' 'alpha-rev: YRANAC' "$out"
+    assert 'beta reaches the map' 'beta-len: 14' "$out"
     assert 'raw print is masked' 'raw: <concealed by dls>' "$out"
-    assert 'prefix hands one value to one child' 'child-rev: eulav-terces-ateb' "$out"
+    assert_absent 'longer secret tail is masked' 'TAIL9999' "$out"
+    assert 'prefix hands one value to one child' 'child-rev: 9999LIATYRANAC' "$out"
     assert 'map does not reach external children' 'child sees no secret map' "$out"
     assert 'prefix scope ends with its child' 'prefix did not leak' "$out"
 
@@ -125,7 +139,7 @@ integer server=0
     log="$(<$OP_FAKE_LOG)"
     reads=${#${(M)${(f)log}:#read*}}
     signouts=${#${(M)${(f)log}:#signout*}}
-    assert 'warm call still populates' 'alpha-rev: eulav-terces-ahpla' "$out"
+    assert 'warm call still populates' 'alpha-rev: YRANAC' "$out"
     assert 'warm call adds no reads' 2 $reads
     assert 'warm call adds no signout' 1 $signouts
 
