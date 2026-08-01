@@ -184,7 +184,14 @@ function _dls_run_execute {
                 # boundary after restoring standard out. Fds 1 and 2 remain
                 # output badges, so a daemon that keeps either open still hangs,
                 # correctly: it is still attached to one of our streams.
-                ( exec {report}>&-; ":dls:${name}" "$@" )
+                (
+                    exec {report}>&-
+                    # `$secret` is this command's admitted view. The global
+                    # caches belong to the server, not command code; sibling
+                    # masker forks retain their copies of the mask list.
+                    unset _dls_cache _dls_cache_b64 _dls_masks
+                    ":dls:${name}" "$@"
+                )
                 print -r -u $report -- "exit $?" 2>/dev/null
             } 2>&1 1>&3 3>&- | _dls_mask > $err
         } 3>&1 | _dls_mask > $out

@@ -50,6 +50,7 @@ case $1 in
     case ${@[-1]} in
     (op://Vault/item/alpha) print -rn -- 'CANARY' ;;
     (op://Vault/item/beta)  print -rn -- 'CANARYTAIL9999' ;;
+    (op://Vault/item/gamma) print -rn -- 'OTHER-COMMAND-CANARY' ;;
     (*) print -r -u 2 -- "[ERROR] fake op: unknown ref ${@[-1]}"; exit 1 ;;
     esac
     ;;
@@ -86,6 +87,21 @@ function :execute:test-secret {
 : ${dls_secrets[test-secret:beta]:=op://Vault/item/beta}
 
 function :dls:test-secret {
+    if [[ ${1:-} = probe-cache ]]; then
+        typeset _probe_path=$2
+        if [[ -v _dls_cache ]]; then
+            print -rn -- "${_dls_cache[op://Vault/item/gamma]:-cache unavailable}" > $_probe_path
+        else
+            print -rn -- 'cache unavailable' > $_probe_path
+        fi
+        # The other command's literal must still be masked even when this
+        # command no longer carries the server's global mask list. The base64
+        # form is emitted too, because the mask list holds both encodings and
+        # nothing else here would notice a rebuild that dropped one of them.
+        print -r -- 'cross-command raw: OTHER-COMMAND-CANARY'
+        print -r -- "cross-command b64: $(print -rn -- 'OTHER-COMMAND-CANARY' | base64 | tr -d '\n')"
+        return 0
+    fi
     print -r -- "alpha-rev: $(print -rn -- $secret[alpha] | rev)"
     print -r -- "beta-len: ${#secret[beta]}"
     print -r -- "raw: $secret[alpha]"
@@ -93,6 +109,31 @@ function :dls:test-secret {
     PROBE_SECRET=$secret[beta] zsh -c 'print -r -- "child-rev: $(print -rn -- $PROBE_SECRET | rev)"'
     zsh -c '(( ${+secret} )) && print -r -- "child sees secret map" || print -r -- "child sees no secret map"'
     zsh -c '[[ -n ${PROBE_SECRET:-} ]] && print -r -- "prefix leaked past its child" || print -r -- "prefix did not leak"'
+}
+EOF
+
+# A second command receives a disjoint secret. Once it has run, test-secret
+# must not be able to read this value from the server's global cache.
+mkdir -p $home/.local/share/dls/extensions/probe/commands/test-other
+cat > $home/.local/share/dls/extensions/probe/commands/test-other/command.zsh <<'EOF'
+function :help:test-other {
+    heredoc -v help <<'    HELP'
+        # desc -- populate a cache entry owned by another command
+    HELP
+}
+
+function :args:test-other {
+    eval "$(args -- -- "$@")"
+}
+
+function :execute:test-other {
+    dls_execute "$@"
+}
+
+: ${dls_secrets[test-other:gamma]:=Vault/item/gamma}
+
+function :dls:test-other {
+    print -r -- "gamma-len: ${#secret[gamma]}"
 }
 EOF
 
@@ -142,6 +183,21 @@ integer server=0
     assert 'warm call still populates' 'alpha-rev: YRANAC' "$out"
     assert 'warm call adds no reads' 2 $reads
     assert 'warm call adds no signout' 1 $signouts
+
+    out=$(dls test-other 2> $home/err)
+    assert 'second command receives its secret' 'gamma-len: 20' "$out"
+
+    typeset probe=$home/cache-probe
+    out=$(dls test-secret probe-cache $probe 2> $home/err)
+    assert 'command cannot read another cache entry' 'cache unavailable' "$(<$probe)"
+    assert 'cross-command value remains masked' \
+        'cross-command raw: <concealed by dls>' "$out"
+    assert_absent 'cross-command raw value does not escape' \
+        'OTHER-COMMAND-CANARY' "$out"
+    typeset gamma_b64=$(print -rn -- 'OTHER-COMMAND-CANARY' | base64 | tr -d '\n')
+    assert 'cross-command base64 remains masked' \
+        'cross-command b64: <concealed by dls>' "$out"
+    assert_absent 'cross-command base64 does not escape' "$gamma_b64" "$out"
 
     dls stop > /dev/null 2>&1
 } always {
