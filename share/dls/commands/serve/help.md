@@ -18,10 +18,17 @@ authorization, then the `op` session is signed out and left cold again. Because
 fetches are rare, each authorization prompt stays a deliberate event: an
 unexpected prompt is an alarm, not an inconvenience.
 
-All command and library code is loaded once, at startup. New or edited command code
-is inert until a human restarts the server; the restart is the approval gate
-through which agent authored code gains access to secrets. `dls status`
-reports files that have changed on disk since load.
+All command and library code registered at startup is loaded before the socket
+binds. New or edited code is inert until a human restarts the server; the
+restart is the approval gate through which agent authored code gains access to
+secrets. A missing helper or one with a syntax error aborts startup rather than
+remaining a deferred failure on first use: that refusal is the gate working.
+`dls status` reports files that have changed on disk since load.
+
+The gate covers functions registered when the server starts. Code already
+admitted by the gate can explicitly register or source additional functions at
+runtime; that action is part of the approved code's behavior and is not a hot
+reload performed by dls.
 
 Command output is masked line by line against every cached secret value and its
 base64 form, best effort.

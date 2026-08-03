@@ -42,8 +42,9 @@ function :help {
         socket, appear on a command line, or rest in a file.
 
         Each `dls` command is a `zshctl` extension command. The server loads
-        all command code at startup and never reloads; activating new or edited
-        command code requires a server restart, which is the human approval gate.
+        all registered command and helper code at startup and never reloads;
+        activating new or edited code requires a server restart, which is the
+        human approval gate.
         ## OPTIONS
         > options
         ## COMMANDS

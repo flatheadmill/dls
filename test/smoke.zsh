@@ -175,6 +175,68 @@ else
     (( failures++ ))
 fi
 
+# Helper functions are bound at startup rather than read from disk per request.
+# This asserts that positively, by the one consequence visible from outside: a
+# helper that cannot be resolved has to stop the server at the gate. If helpers
+# were still resolved lazily inside each forked request, an unparseable one
+# would be invisible at startup and the server would bind its socket happily —
+# which is exactly what it did before this was fixed. So a server that refuses
+# here is the only proof from out here that the binding happens at all.
+typeset unbindable_home=$home/unbindable-home
+typeset unbindable_socket=$home/unbindable.socket
+typeset unbindable_ext=$unbindable_home/.local/share/dls/extensions/probe
+mkdir -p $unbindable_ext/commands/test-helper $unbindable_ext/functions
+cat > $unbindable_ext/commands/test-helper/command.zsh <<'EOF'
+function :help:test-helper {
+    heredoc -v help <<'    HELP'
+        # desc -- calls a library helper
+    HELP
+}
+
+function :args:test-helper {
+    eval "$(args -- -- "$@")"
+}
+
+function :execute:test-helper {
+    dls_execute "$@"
+}
+
+function :dls:test-helper {
+    test_helper
+}
+EOF
+print -r -- "print -r -- 'unterminated" > $unbindable_ext/functions/test_helper
+# Backgrounded rather than captured, because the failure mode here is a server
+# that starts. A command substitution would then wait on a foreground server
+# that never returns, and the suite would hang instead of reporting — a test
+# that hangs on regression is barely better than one that passes on it.
+HOME=$unbindable_home DLS_SOCKET=$unbindable_socket \
+    $zshctl $root/bin/dls serve > $home/unbindable.log 2>&1 &
+integer unbindable_server=$!
+integer unbindable_started=0
+for i in {1..100}; do
+    [[ -S $unbindable_socket ]] && { unbindable_started=1; break }
+    kill -0 $unbindable_server 2>/dev/null || break
+    sleep 0.1
+done
+if (( unbindable_started )); then
+    print -r -- 'FAIL: unresolvable helper bound a socket and served'
+    (( failures++ ))
+    HOME=$unbindable_home DLS_SOCKET=$unbindable_socket \
+        $zshctl $root/bin/dls stop > /dev/null 2>&1
+    kill $unbindable_server 2>/dev/null
+else
+    print -r -- 'ok: unresolvable helper never binds'
+fi
+wait $unbindable_server 2>/dev/null
+# `cat` rather than the `$(<file)` form, which is read during a `zsh -n` syntax
+# check when it appears as a command argument — the file does not exist at that
+# point and the check fails. Oddly it is only that position: the same form in a
+# `typeset` assignment passes `zsh -n` silently. `cat` sidesteps the question
+# and tolerates the file's absence quietly.
+typeset unbindable_out=$(cat $home/unbindable.log 2>/dev/null)
+assert 'unresolvable helper is named' 'test_helper' "$unbindable_out"
+
 integer server=0
 {
     dls serve > $home/serve.log 2>&1 &

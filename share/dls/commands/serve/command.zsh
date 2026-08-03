@@ -66,6 +66,107 @@ function _dls_load_sources {
     done
 }
 
+# Close the library half of the restart gate. zshctl registers files in every
+# extension `functions` directory as autoload stubs, and extension directories
+# lead fpath. Left alone, the parent retains those unresolved stubs while each
+# forked request reads the current file from disk. A command file can also
+# replace a framework helper with a direct function definition, which +X will
+# preserve rather than overwrite.
+#
+# Reclaim the reserved library names first: remove any stub or direct
+# definition, register the exact install-tree file with -R so fpath cannot
+# redirect it, resolve it now, and assert the origin. Every function shipped in
+# dls's own library is reserved, along with the zshctl library functions used by
+# the server path. Then resolve every remaining stub — extension helpers — so
+# the body admitted at startup is the body requests keep using.
+#
+# What the reclaim is for, since a reader will otherwise assume the wrong
+# threat. It is not defending framework names against approved code: a command
+# file runs arbitrary top level code in this parent when it is sourced, so
+# approved code is trusted, entirely, and the help says as much. The reclaim
+# beats fpath precedence for the accident. An extension that innocently ships a
+# `functions/pocket` would otherwise win stub resolution, because extension
+# directories lead fpath — a name collision rather than an attack, which is
+# exactly the shape of trouble this project expects. The reclaim makes a
+# collision lose to the framework loudly instead of winning silently.
+#
+# This closes names registered before the gate. Approved code can still add an
+# fpath directory and register or source more code at runtime; zshctl's `block`
+# helper does exactly that for its block.d functions. That is execution already
+# authorized by the loaded body, not something a generic autoload sweep can
+# prevent.
+function _dls_bind_functions {
+    typeset _dls_own_dir=${functions_source[:execute:serve]:A:h:h:h}/functions
+    typeset _dls_zshctl_dir=${functions_source[delegate]:A:h:h}/share/zshctl/functions
+    typeset -A _dls_reserved=()
+    typeset _dls_file _dls_name
+
+    [[ -d $_dls_own_dir ]] ||
+        abend 'fatal: unable to find dls function library at %s' $_dls_own_dir
+    [[ -d $_dls_zshctl_dir ]] ||
+        abend 'fatal: unable to find zshctl function library at %s' $_dls_zshctl_dir
+
+    for _dls_file in $_dls_own_dir/*(N.); do
+        _dls_reserved[${_dls_file:t}]=$_dls_file
+    done
+    # Direct server dependencies plus the transitive helpers they call.
+    for _dls_name in abend heredoc pocket slurp tactac warn; do
+        _dls_reserved[$_dls_name]=$_dls_zshctl_dir/$_dls_name
+    done
+
+    for _dls_name in ${(ok)_dls_reserved}; do
+        _dls_file=$_dls_reserved[$_dls_name]
+        [[ -f $_dls_file ]] ||
+            abend 'fatal: reserved function %s is missing from %s' \
+                $_dls_name $_dls_file
+        if (( ${+functions[$_dls_name]} )); then
+            unfunction $_dls_name ||
+                abend 'fatal: unable to reclaim reserved function %s' $_dls_name
+        fi
+        autoload -zUR $_dls_file ||
+            abend 'fatal: unable to pin reserved function %s to %s' \
+                $_dls_name $_dls_file
+        autoload -zU +X $_dls_name ||
+            abend 'fatal: unable to load reserved function %s from %s' \
+                $_dls_name $_dls_file
+        [[ ${functions_source[$_dls_name]:A} = ${_dls_file:A} ]] ||
+            abend 'fatal: reserved function %s loaded from %s instead of %s' \
+                $_dls_name ${functions_source[$_dls_name]:-unknown} $_dls_file
+    done
+
+    # +X loads without executing. Do not hide its diagnostics: on a parse or
+    # lookup failure zsh leaves the name as a stub, and startup must fail rather
+    # than silently restoring per-request disk reads.
+    autoload -zU +X -m '*'
+
+    # A surviving stub is not evidence that a load failed, it is the whole
+    # invariant: a stub body is the only mechanism by which a request can read a
+    # function from disk, so if none remain, none can. That is why the aggregate
+    # exit status of the sweep above is not the oracle — it reports nonzero here
+    # even when every name resolved — while this postcondition is exact.
+    #
+    # Match the flag prefix rather than one literal. zshctl registers with -zU,
+    # giving `builtin autoload -XU`, but a bare `autoload name` gives `builtin
+    # autoload -X` with no U, and an exact comparison walks straight past it.
+    # Insurance rather than a live bug, and it costs nothing to be right for
+    # every registration flavour.
+    typeset -a _dls_stubs=() _dls_stub_files=()
+    typeset -a _dls_found
+    for _dls_name in ${(ok)functions}; do
+        [[ ${functions[$_dls_name]} = 'builtin autoload -X'* ]] || continue
+        _dls_stubs+=( $_dls_name )
+        # Name the file, not just the function. The operator who hits this is
+        # usually mid-edit on a helper and would otherwise walk fpath by hand.
+        _dls_found=( ${^fpath}/$_dls_name(N.) )
+        _dls_stub_files+=( ${_dls_found[1]:-$_dls_name (not found on fpath)} )
+    done
+    if (( ${#_dls_stubs} )); then
+        abend 'fatal: unable to bind all function libraries at startup; unresolved: %s' \
+            "${(j:, :)_dls_stub_files}"
+    fi
+    return 0
+}
+
 # The loaded commands, for `dls status` and the startup banner. Read the
 # expansion inside out: (@k)functions is every defined function name;
 # (M)...:#:dls:* keeps only the ones matching :dls:* — with the M flag
@@ -459,13 +560,7 @@ function :execute:serve {
         fi
     done
 
-    # Belt and suspenders for the no-reload invariant: force the
-    # function libraries we depend on to resolve now, not lazily from
-    # disk on first use after an agent may have edited them.
-    typeset name
-    for name in pocket slurp tactac warn dls_ref dls_fetch dls_signout; do
-        autoload -zU +X $name 2>/dev/null
-    done
+    _dls_bind_functions
 
     typeset -gA _dls_cache=() _dls_cache_b64=()
     typeset -ga _dls_masks=()
