@@ -201,6 +201,11 @@ integer server=0
 
     dls stop > /dev/null 2>&1
 } always {
+    # `$server` may name the shell wrapper around zshctl rather than the broker
+    # itself, so a bare kill is aimed at a pid that may not be the one holding
+    # the socket. `dls stop` is a request, so it reaches the server whatever its
+    # pid, and it costs nothing on a run that already stopped.
+    [[ -S $DLS_SOCKET ]] && dls stop > /dev/null 2>&1
     (( server )) && kill $server 2>/dev/null
     if (( failures )); then
         print -r -- '--- serve.log ---'

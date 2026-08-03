@@ -330,11 +330,85 @@ integer server=0
         print -r -- 'FAIL: socket not removed on exit'
         (( failures++ ))
     fi
+
+    # A signal must be sufficient by itself. Do not wake the listener with a
+    # request after sending it: that is the event that concealed the blocking
+    # accept bug by giving the loop a chance to observe its cleared run flag.
+    typeset signal signal_name signal_status signal_line
+    integer launcher actual
+    for signal in INT TERM; do
+        signal_name=${(L)signal}
+        export DLS_SOCKET=$home/dls-$signal_name.socket
+        dls serve > $home/serve-$signal_name.log 2>&1 &
+        launcher=$!
+        server=$launcher
+
+        for i in {1..100}; do
+            [[ -S $DLS_SOCKET ]] && break
+            sleep 0.1
+        done
+        if [[ ! -S $DLS_SOCKET ]]; then
+            print -r -- "FAIL: $signal_name server never bound its socket"
+            (( failures++ ))
+            continue
+        fi
+
+        # `$!` can be the shell wrapper around zshctl. Ask the server for its
+        # own pid before the signal, then make no further connection.
+        actual=0
+        signal_status=$(dls status 2> $home/err)
+        for signal_line in ${(f)signal_status}; do
+            [[ $signal_line = '  pid: '* ]] || continue
+            actual=${signal_line#'  pid: '}
+        done
+        if (( ! actual )); then
+            print -r -- "FAIL: $signal_name status did not report the server pid"
+            (( failures++ ))
+            dls stop > /dev/null 2>&1
+            wait $launcher 2>/dev/null
+            server=0
+            continue
+        fi
+        server=$actual
+
+        kill -s $signal $server
+        for i in {1..30}; do
+            kill -0 $server 2>/dev/null || break
+            sleep 0.1
+        done
+        if kill -0 $server 2>/dev/null; then
+            print -r -- "FAIL: server still running after SIG$signal"
+            (( failures++ ))
+            kill -KILL $server 2>/dev/null
+        else
+            print -r -- "ok: server exited after SIG$signal without a request"
+        fi
+        wait $launcher 2>/dev/null
+        server=0
+
+        if [[ ! -e $DLS_SOCKET ]]; then
+            print -r -- "ok: SIG$signal removed the socket"
+        else
+            print -r -- "FAIL: SIG$signal left the socket behind"
+            (( failures++ ))
+        fi
+    done
 } always {
     if (( failures )); then
         print -r -- '--- serve.log ---'
         print -r -- "$(<$home/serve.log)"
     fi
+    # An aborted run cannot rely on pids, but the socket knows who is listening.
+    # `$server` may name the shell wrapper around zshctl rather than the broker
+    # — the signal cases below ask the server for its own pid for exactly that
+    # reason — so a bare kill here is aimed at a process that may not be the one
+    # holding the socket. Whether that actually strands a broker was not
+    # reproduced: three attempts, including a process group interrupt mid-run,
+    # all tore down cleanly. So this is a cheap guard against a measured
+    # property rather than a fix for an observed leak. Stopping by protocol
+    # reaches the server whatever its pid and costs nothing on a run that
+    # already stopped, which is enough to keep on its own terms.
+    [[ -S $DLS_SOCKET ]] && dls stop > /dev/null 2>&1
     (( server )) && kill $server 2>/dev/null
     rm -rf $home
 }

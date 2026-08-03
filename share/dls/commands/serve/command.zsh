@@ -25,6 +25,7 @@
 zmodload zsh/net/socket
 zmodload zsh/datetime
 zmodload zsh/system
+zmodload zsh/zselect
 
 function :help:serve {
     help=$(<${functions_source[:help:serve]:A:h}/help.md)
@@ -504,6 +505,27 @@ function :execute:serve {
 
     integer conn
     while (( _dls_running )); do
+        # Do not park forever in accept: traps run while zsocket is blocked,
+        # but the loop cannot observe the cleared run flag until accept
+        # returns. A one-second readiness timeout bounds signal shutdown while
+        # keeping an idle server asleep almost all of the time. Recheck after a
+        # readable result as well, so a signal in that seam never enters an
+        # accept the server has already been told to abandon.
+        #
+        # A readable listener cannot hand back a blocking accept here: a Unix
+        # domain accept queue only shrinks by accept, so a client that connects
+        # and closes before we get to it is still dequeued, and the request read
+        # below finds its immediate end of file within its own five second
+        # bound. The folklore about select promising a read that then blocks is
+        # about reset handling on network stacks and does not reach this socket.
+        #
+        # Two parks remain by design and are not this loop's to fix. Secret
+        # resolution runs in the parent, so a biometric prompt defers shutdown
+        # for as long as `op` takes, deliberately. And a client that dies before
+        # opening its fifos wedges a disowned reply subshell, which is off the
+        # loop and disposable. Neither holds the accept.
+        zselect -r -t 100 $_dls_listen || continue
+        (( _dls_running )) || break
         zsocket -a $_dls_listen || continue
         conn=$REPLY
         {
