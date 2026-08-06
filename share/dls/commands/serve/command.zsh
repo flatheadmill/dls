@@ -177,19 +177,6 @@ function _dls_commands {
     reply=( ${(o)${${(M)${(@k)functions}:#:dls:*}#:dls:}} )
 }
 
-# Rebuild the output masks after any cache change. Values are ordered longest
-# first because masking a prefix destroys the longer exact match and exposes
-# its tail. The numeric length prefix gives (On) something to sort; #*: removes
-# only that first prefix, so colons in the value survive untouched.
-function _dls_rebuild_masks {
-    typeset -a _dls_keyed=()
-    typeset _dls_value
-    for _dls_value in "${(@v)_dls_cache}" "${(@v)_dls_cache_b64}"; do
-        _dls_keyed+=( "${#_dls_value}:$_dls_value" )
-    done
-    _dls_masks=( "${(@)${(@On)_dls_keyed}#*:}" )
-}
-
 # Line oriented masking filter. Replaces every cached secret value and
 # its base64 form with a marker. Best effort by design: an exact or
 # base64 occurrence is caught, a laundered one is not. Masks shorter
@@ -288,13 +275,19 @@ function _dls_run_execute {
                 # correctly: it is still attached to one of our streams.
                 (
                     exec {report}>&-
-                    # `$secret` is this command's admitted view. The global
-                    # caches belong to the server, not command code; sibling
-                    # masker forks retain their copies of the mask list.
+                    # `$secret` is this command's admitted view, and
+                    # `$request_dir` is its private scratch. The global caches
+                    # belong to the server, not command code; sibling masker
+                    # forks retain their copies of the mask list.
                     unset _dls_cache _dls_cache_b64 _dls_masks
+                    typeset request_dir=$_dls_request
                     ":dls:${name}" "$@"
                 )
                 print -r -u $report -- "exit $?" 2>/dev/null
+                # The request owned this directory and the request is over.
+                # Removing by the remembered name rather than by enumeration is
+                # what lets the files root stay unlistable.
+                rm -rf $_dls_request
             } 2>&1 1>&3 3>&- | _dls_mask > $err
         } 3>&1 | _dls_mask > $out
     ) &!
@@ -305,10 +298,24 @@ function _dls_run_execute {
 # configuration cannot spend a biometric authorization. `$secret` belongs to
 # dls throughout this dynamic-scope path; framework helpers must keep their
 # locals prefixed so they cannot shadow the caller's map.
+#
+# Shape is declared, not discovered. `dls_secrets` names a value and
+# `dls_files` names a file, and both arrive in the same `$secret` map so a
+# command body reads one thing and writes the same assignment prefix either
+# way. The cache holds bytes and forms no opinion about them, because it
+# cannot form an honest one: two commands may want the same vault entry in
+# different shapes, and any type the cache carried would be wrong for one of
+# them. The judgment therefore happens here, filling this command's map,
+# which is the only place we know what this command asked for.
+#
+# `$_dls_request` is this request's private directory, created by the caller.
+# Files materialize into it named for their key, so an environment dump reads
+# `GOOGLE_APPLICATION_CREDENTIALS=…/GOOGLE_APPLICATION_CREDENTIALS` and
+# documents itself at the moment of the accident.
 function _dls_resolve_secrets {
     typeset _dls_name=$1 _dls_entry _dls_command _dls_key _dls_reference
     typeset _dls_failure=''
-    typeset -A _dls_references=()
+    typeset -A _dls_references=() _dls_shapes=()
     integer _dls_attempted=0 _dls_failed=0
 
     # Parse on the rightmost colon: command names may themselves contain
@@ -323,6 +330,19 @@ function _dls_resolve_secrets {
             return 69
         fi
         _dls_references[${_dls_key}]=$REPLY
+        _dls_shapes[${_dls_key}]=value
+    done
+    for _dls_entry in ${(ok)dls_files}; do
+        _dls_command=${_dls_entry%:*}
+        _dls_key=${_dls_entry##*:}
+        [[ $_dls_command = "$_dls_name" ]] || continue
+        _dls_reference=${dls_files[${_dls_entry}]}
+        if ! dls_ref "$_dls_reference"; then
+            REPLY="dls: invalid secret reference in dls_files[${_dls_entry}]: $_dls_reference"
+            return 69
+        fi
+        _dls_references[${_dls_key}]=$REPLY
+        _dls_shapes[${_dls_key}]=file
     done
 
     # All references are now known good. Fetch every cold value under one op
@@ -334,7 +354,9 @@ function _dls_resolve_secrets {
             (( ${+_dls_cache[${_dls_reference}]} )) && continue
             (( _dls_attempted++ ))
             if ! dls_fetch "$_dls_reference"; then
-                _dls_failure="dls: unable to resolve secret reference $_dls_reference for dls_secrets[${_dls_name}:${_dls_key}]: ${${REPLY:-unknown error}#dls: }"
+                typeset _dls_table=dls_secrets
+                [[ ${_dls_shapes[${_dls_key}]} = file ]] && _dls_table=dls_files
+                _dls_failure="dls: unable to resolve secret reference $_dls_reference for ${_dls_table}[${_dls_name}:${_dls_key}]: ${${REPLY:-unknown error}#dls: }"
                 _dls_failed=1
                 break
             fi
@@ -347,10 +369,57 @@ function _dls_resolve_secrets {
         return 69
     fi
 
+    # Fill the map, and assemble this request's masks while we are here. The
+    # mask list is exactly this command's own values and their base64 forms,
+    # longest first.
+    #
+    # Own values only, because concealing a value a command was never given
+    # turns the filter into an oracle: print a guess, watch it come back
+    # concealed, and you have learned something about a secret you never held.
+    #
+    # Their base64 forms, because HTTP Basic authentication encodes user and
+    # token into the Authorization header and `curl -v` prints that header. A
+    # token that never appears raw appears encoded in the most ordinary
+    # debugging session there is.
+    #
+    # Longest first, because masks are applied in order with a plain
+    # substitution: a shorter value that is a prefix of a longer one consumes
+    # its head and streams the tail in the clear. A rotated token cached beside
+    # its predecessor is the mundane way into that, not an exotic one.
+    typeset -a _dls_keyed=()
+    typeset _dls_value _dls_path
     for _dls_key in ${(ok)_dls_references}; do
         _dls_reference=${_dls_references[${_dls_key}]}
-        secret[${_dls_key}]="${_dls_cache[${_dls_reference}]}"
+        _dls_value=${_dls_cache[${_dls_reference}]}
+        if [[ ${_dls_shapes[${_dls_key}]} = file ]]; then
+            _dls_path=$_dls_request/$_dls_key
+            if ! print -rn -- "$_dls_value" > $_dls_path; then
+                REPLY="dls: unable to write dls_files[${_dls_name}:${_dls_key}] to $_dls_path"
+                return 69
+            fi
+            chmod 600 $_dls_path 2>/dev/null
+            secret[${_dls_key}]=$_dls_path
+            continue
+        fi
+        # A newline survives an environment variable perfectly well. We refuse
+        # it anyway: it is the tell that this was meant to be a file, and a path
+        # in an environment dump is a path into a directory nothing can
+        # enumerate. A null byte is refused for a different reason — nothing
+        # carries one through `execve`, so the child would receive a truncated
+        # credential and fail somewhere far from here.
+        if [[ $_dls_value = *$'\n'* ]]; then
+            REPLY="dls: newline in dls_secrets[${_dls_name}:${_dls_key}]: declare it in dls_files"
+            return 69
+        fi
+        if [[ $_dls_value = *$'\x00'* ]]; then
+            REPLY="dls: null byte in dls_secrets[${_dls_name}:${_dls_key}]: declare it in dls_files"
+            return 69
+        fi
+        secret[${_dls_key}]=$_dls_value
+        _dls_keyed+=( "${#_dls_value}:$_dls_value" )
+        _dls_keyed+=( "${#_dls_cache_b64[${_dls_reference}]}:${_dls_cache_b64[${_dls_reference}]}" )
     done
+    _dls_masks=( "${(@)${(@On)_dls_keyed}#*:}" )
     return 0
 }
 
@@ -369,9 +438,22 @@ function _dls_handle_execute {
     # background wrapper would die with it and cost a biometric
     # authorization on every call. Resolution serializes fingerprint
     # prompts as a side effect, which is what a prompt deserves.
+    #
+    # The request directory is created before resolution because that is where
+    # file secrets materialize, and removed here on every failure that returns
+    # before the wrapper starts. The wrapper owns it from launch onward and
+    # unlinks it after the exit record; until then nothing else knows the name,
+    # so the parent has to be the one to clean up.
+    typeset _dls_request
+    _dls_request=$(mktemp -d $_dls_files/$$.XXXXXX) || {
+        _dls_reply $conn "$out" "$err" 73 '' \
+            "dls: unable to create a request directory under $_dls_files"$'\n'
+        return
+    }
     typeset -A secret=()
     typeset REPLY=''
     if ! _dls_resolve_secrets "$name"; then
+        rm -rf $_dls_request
         _dls_reply $conn "$out" "$err" 69 '' \
             "${REPLY:-dls: unable to resolve secrets}"$'\n'
         return
@@ -443,7 +525,6 @@ function _dls_control_clear {
         _dls_cache=()
         _dls_cache_b64=()
     fi
-    _dls_rebuild_masks
     _dls_reply $conn "$out" "$err" $(( failures != 0 )) \
         "dls: cleared $cleared; ${#_dls_cache} cached"$'\n' "$errtext"
 }
@@ -546,18 +627,38 @@ function :execute:serve {
     # Reject a malformed secrets table before the server binds its socket;
     # surfacing this later as a command failure would blame the caller for an
     # operator configuration error.
-    typeset _dls_entry _dls_command _dls_key
-    for _dls_entry in ${(ok)dls_secrets}; do
-        if [[ $_dls_entry != *:* ]]; then
-            abend 'fatal: invalid dls_secrets key %s: expected <command>:<secret-key>' \
-                ${(qqq)_dls_entry}
-        fi
-        _dls_command=${_dls_entry%:*}
-        _dls_key=${_dls_entry##*:}
-        if [[ -z $_dls_command || -z $_dls_key ]]; then
-            abend 'fatal: invalid dls_secrets key %s: command and secret key must be nonempty' \
-                ${(qqq)_dls_entry}
-        fi
+    typeset _dls_entry _dls_command _dls_key _dls_table
+    for _dls_table in dls_secrets dls_files; do
+        for _dls_entry in ${(ok)${(P)_dls_table}}; do
+            if [[ $_dls_entry != *:* ]]; then
+                abend 'fatal: invalid %s key %s: expected <command>:<secret-key>' \
+                    $_dls_table ${(qqq)_dls_entry}
+            fi
+            _dls_command=${_dls_entry%:*}
+            _dls_key=${_dls_entry##*:}
+            if [[ -z $_dls_command || -z $_dls_key ]]; then
+                abend 'fatal: invalid %s key %s: command and secret key must be nonempty' \
+                    $_dls_table ${(qqq)_dls_entry}
+            fi
+            # A file key becomes a pathname component inside the request
+            # directory, so it has to be one name and not a path. Without this
+            # `../elsewhere` materializes outside the directory and survives a
+            # cleanup that removes only the directory it knows about. This is
+            # not general sanitizing; it is the condition that makes "named for
+            # its key, inside this directory" a true sentence.
+            if [[ $_dls_table = dls_files ]]; then
+                if [[ $_dls_key = */* || $_dls_key = . || $_dls_key = .. ]]; then
+                    abend 'fatal: invalid dls_files key %s: the secret key names a file and must be a single name' \
+                        ${(qqq)_dls_entry}
+                fi
+            fi
+            # One key cannot be both shapes. Both tables assign to the same
+            # `$secret` entry, so whichever ran second would silently win.
+            if [[ $_dls_table = dls_files ]] && (( ${+dls_secrets[$_dls_entry]} )); then
+                abend 'fatal: %s is declared in both dls_secrets and dls_files' \
+                    ${(qqq)_dls_entry}
+            fi
+        done
     done
 
     _dls_bind_functions
@@ -584,6 +685,33 @@ function :execute:serve {
         # Stale socket from an unclean exit; nobody is listening.
         rm -f $_dls_socket_path
     fi
+
+    # The files root, where each request gets a private directory and file
+    # secrets materialize. Mode 0300 is the whole of the file-side mechanism:
+    # enumerating a directory needs the read bit at `opendir`, while opening a
+    # known name inside it needs only the execute bit. So a recursive sweep
+    # stops at the door and a program handed an absolute path notices nothing.
+    #
+    # Anything already here is garbage by definition. Only one server can own
+    # this socket, and the check above has already refused to start if another
+    # one does, so nothing under this root belongs to a living request. Wiping
+    # it is therefore the entire lifecycle at this end — no sweeper, no
+    # liveness test, no pid to reason about.
+    #
+    # The wipe raises the mode first because removing the contents means
+    # enumerating them, which is the one thing the mode forbids. That is the
+    # only moment the door is open, it is in the server's own hands, and it
+    # closes before the socket binds. Per-request cleanup needs no such thing,
+    # because it removes a directory whose name it remembers.
+    typeset -g _dls_files=${_dls_socket_path:h}/files
+    mkdir -p $_dls_files ||
+        abend 'fatal: unable to create %s' $_dls_files
+    chmod 700 $_dls_files ||
+        abend 'fatal: unable to open %s for cleaning' $_dls_files
+    rm -rf $_dls_files/*(N) $_dls_files/.*(N^-/) ||
+        abend 'fatal: unable to clean %s' $_dls_files
+    chmod 0300 $_dls_files ||
+        abend 'fatal: unable to secure %s' $_dls_files
 
     zsocket -l $_dls_socket_path ||
         abend 'fatal: unable to listen on %s' $_dls_socket_path

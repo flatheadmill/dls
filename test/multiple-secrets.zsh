@@ -50,7 +50,7 @@ case $1 in
     case ${@[-1]} in
     (op://Vault/item/alpha) print -rn -- 'CANARY' ;;
     (op://Vault/item/beta)  print -rn -- 'CANARYTAIL9999' ;;
-    (op://Vault/item/gamma) print -rn -- 'OTHER-COMMAND-CANARY' ;;
+    (op://Vault/item/gamma) print -rn -- 'ZEBRA-VALUE-9876' ;;
     (*) print -r -u 2 -- "[ERROR] fake op: unknown ref ${@[-1]}"; exit 1 ;;
     esac
     ;;
@@ -94,12 +94,14 @@ function :dls:test-secret {
         else
             print -rn -- 'cache unavailable' > $_probe_path
         fi
-        # The other command's literal must still be masked even when this
-        # command no longer carries the server's global mask list. The base64
-        # form is emitted too, because the mask list holds both encodings and
-        # nothing else here would notice a rebuild that dropped one of them.
-        print -r -- 'cross-command raw: OTHER-COMMAND-CANARY'
-        print -r -- "cross-command b64: $(print -rn -- 'OTHER-COMMAND-CANARY' | base64 | tr -d '\n')"
+        # The other command's literal must stream in the clear. Masking it
+        # would mean concealing a value this command was never given, which
+        # turns the filter into an oracle: print a guess, watch it vanish, and
+        # you have learned a secret you never held. The base64 form is emitted
+        # for the same reason, and because its counterpart for an own value is
+        # what keeps `curl -v` covered.
+        print -r -- 'cross-command raw: ZEBRA-VALUE-9876'
+        print -r -- "cross-command b64: $(print -rn -- 'ZEBRA-VALUE-9876' | base64 | tr -d '\n')"
         return 0
     fi
     print -r -- "alpha-rev: $(print -rn -- $secret[alpha] | rev)"
@@ -185,19 +187,16 @@ integer server=0
     assert 'warm call adds no signout' 1 $signouts
 
     out=$(dls test-other 2> $home/err)
-    assert 'second command receives its secret' 'gamma-len: 20' "$out"
+    assert 'second command receives its secret' 'gamma-len: 16' "$out"
 
     typeset probe=$home/cache-probe
     out=$(dls test-secret probe-cache $probe 2> $home/err)
     assert 'command cannot read another cache entry' 'cache unavailable' "$(<$probe)"
-    assert 'cross-command value remains masked' \
-        'cross-command raw: <concealed by dls>' "$out"
-    assert_absent 'cross-command raw value does not escape' \
-        'OTHER-COMMAND-CANARY' "$out"
-    typeset gamma_b64=$(print -rn -- 'OTHER-COMMAND-CANARY' | base64 | tr -d '\n')
-    assert 'cross-command base64 remains masked' \
-        'cross-command b64: <concealed by dls>' "$out"
-    assert_absent 'cross-command base64 does not escape' "$gamma_b64" "$out"
+    assert 'another command value is not concealed' \
+        'cross-command raw: ZEBRA-VALUE-9876' "$out"
+    typeset gamma_b64=$(print -rn -- 'ZEBRA-VALUE-9876' | base64 | tr -d '\n')
+    assert 'another command base64 is not concealed' \
+        "cross-command b64: $gamma_b64" "$out"
 
     dls stop > /dev/null 2>&1
 } always {

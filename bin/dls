@@ -6,13 +6,14 @@ zshctl[man_title]='DLS Manuals'
 # ~/.config/dls/config.zsh, for example:
 #
 #     dls[socket]=$HOME/elsewhere/dls.socket
-#     dls_secrets[gh:token]=Infrastructure/github/token
+#     dls_secrets[gh:token]=Private/github/token
+#     dls_files[gcloud:GOOGLE_APPLICATION_CREDENTIALS]=Private/gcloud/key
 #
 # A reference is `vault/item/field`. The `op://` prefix is accepted, since
 # that is what 1Password's own interface hands you, but it is noise in a
 # file where every value is an op reference and nothing else could be one.
 #
-typeset -gA dls=() dls_secrets=()
+typeset -gA dls=() dls_secrets=() dls_files=()
 
 [[ -f ~/.config/dls/config.zsh ]] && source ~/.config/dls/config.zsh
 
