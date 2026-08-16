@@ -5,28 +5,33 @@ emulate -L zsh
 # Fetch one secret from 1Password into the server cache. Server side
 # only, parent process only: cache writes in a background child are lost
 # when it exits, so the serve loop resolves secrets before it backgrounds
-# a command. Expects the _dls_cache and _dls_cache_b64 associative arrays
-# declared by `dls serve` in the dynamic scope. It caches bytes and forms no
-# opinion about them: masks are assembled per request from the values a single
-# command was admitted, which is the only scope that knows what was asked for.
-# The reference must already be normalized by `dls_ref`. Does NOT sign
-# out of op; the caller owns the session so that a batch of fetches can
-# ride one biometric authorization. Sets REPLY to an error message on
-# failure.
+# a command. Expects the _dls_cache associative array declared by `dls serve`
+# in the dynamic scope. The cache has one representation: canonical,
+# single-line base64. Shape remains a request concern; dls_decode turns a cache
+# entry into a value or a file only when that request is admitted. The
+# reference must already be normalized by `dls_ref`. Does NOT sign out of op;
+# the caller owns the session so that a batch of fetches can ride one biometric
+# authorization. Sets REPLY to an error message on failure.
 #
-# SAFETY The secret transits the standard out of `op read` into a coproc
-# pipe by way of `pocket`, then lives only in server memory. No temp
-# files, no argv, no environment, no here-strings — a zsh here-string is
-# a temp file.
+# SAFETY Raw bytes transit the pipe from `op read` to base64 and do not enter a
+# Zsh scalar. `pocket` captures the encoded output into server memory. No temp
+# files, secret argv, environment, or here-strings — a zsh here-string is a
+# temp file.
 
 typeset _dls_reference=${1:-} _dls_out _dls_err
+integer _dls_status
 
 [[ -v _dls_cache ]] || {
     REPLY='dls_fetch: no cache in scope: dls_fetch is server side only'
     return 69
 }
 
-if ! pocket _dls_out _dls_err op read --no-newline -- $_dls_reference; then
+pocket _dls_out _dls_err _dls_read_base64 $_dls_reference
+_dls_status=$?
+if (( _dls_status == 70 )); then
+    abend 'fatal: unable to encode secret reference %s' $_dls_reference
+fi
+if (( _dls_status )); then
     case $_dls_err in
     (*'not currently signed in'*)
         REPLY="dls: op not signed in: authorization refused or timed out reading $_dls_reference"
@@ -48,7 +53,4 @@ if ! pocket _dls_out _dls_err op read --no-newline -- $_dls_reference; then
 fi
 
 _dls_cache[$_dls_reference]=$_dls_out
-# Mask the base64 form of the value as well. The tr strips the line wrap
-# GNU base64 adds so the mask stays a single matchable string.
-_dls_cache_b64[$_dls_reference]=$(printf '%s' $_dls_out | base64 | tr -d '\n')
 return 0

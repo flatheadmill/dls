@@ -35,6 +35,12 @@ socket, and the server runs that command where the cache already lives,
 streaming output back through fifos the client created. The socket carries the
 request and completion record, never secret content or command output.
 
+Raw bytes pass directly from `op` into a base64 encoder, and the cache retains
+only that single-line representation. Every content read from the cache goes
+through one decoder. It produces either the value placed in the request's
+`secret` map or the bytes written to a request file; the request interface does
+not expose the encoded representation.
+
 Configuration declares how each secret is delivered. A value stays in memory
 and reaches the one external process that needs it through an assignment
 prefix, never through `argv`. A file is materialized at mode 0600 inside a
@@ -43,11 +49,11 @@ process receives that path, and the request removes the file when it finishes.
 In both cases the ordinary transcript contains the operation — for example,
 `dls gh pr list` — rather than a secret-fetching ceremony.
 
-Output is filtered on the way back, line by line, against the value secrets
-admitted to that request and their exact base64 forms. An exact occurrence of
-a mask at least four characters long becomes `<concealed by dls>`. File
-contents are not masks: exact substitution cannot protect structured material
-that a program may parse or reformat.
+Output is filtered on the way back, line by line, against the decoded value
+secrets admitted to that request. An exact occurrence of a mask at least four
+characters long becomes `<concealed by dls>`. File contents are not masks:
+exact substitution cannot protect structured material that a program may parse
+or reformat.
 
 ## Why Zsh
 
@@ -74,9 +80,9 @@ If your own program needs secrets, it should not need anything significant, and 
 `dls` promises what its architecture can keep. A brokered value does not cross
 the socket, does not appear on a command line, and does not rest on disk. A
 brokered file is exposed only as a request-scoped path below the
-non-enumerable files root. An exact raw or base64 occurrence of an admitted
-value in that request's stdout or stderr is caught by the filter when the mask
-is at least four characters long. A command cannot read another command's
+non-enumerable files root. An exact occurrence of an admitted value in that
+request's stdout or stderr is caught by the filter when the mask is at least
+four characters long. A command cannot read another command's
 secret out of the server's cache. Code that a human has not approved by
 restarting the server does not run — though code that was approved is trusted
 entirely, and may load more of its own once it is running.
@@ -85,7 +91,7 @@ It does not promise to outwit creative logging. A tool that splits a token on
 hyphens before printing it, writes its environment to a debug file, or prints
 a brokered file defeats the output wall — and that is a defect in the tool, to
 be fixed or excised, not something this broker will chase. The filter catches
-exact occurrences and their exact base64 form; it is not a laundering detector.
+exact values; it is not a laundering detector.
 
 The discipline is offered rather than enforced, the same way `chmod` is offered. Nothing stops you writing a command that gives everything away. `chmod` will let you `777` your home directory too, and it will not lecture you first.
 

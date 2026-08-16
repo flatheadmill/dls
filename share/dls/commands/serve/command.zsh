@@ -18,9 +18,9 @@
 # hanging.
 #
 # Output never crosses the socket. The command's standard out and standard
-# error stream through the fifos, masked line by line against every
-# cached secret value. The server touches both fifos exactly once per
-# request, error paths included, so client readers always terminate.
+# error stream through the fifos, masked line by line against the decoded
+# values admitted to that request. The server touches both fifos exactly once
+# per request, error paths included, so client readers always terminate.
 
 zmodload zsh/net/socket
 zmodload zsh/datetime
@@ -177,11 +177,11 @@ function _dls_commands {
     reply=( ${(o)${${(M)${(@k)functions}:#:dls:*}#:dls:}} )
 }
 
-# Line oriented masking filter. Replaces every cached secret value and
-# its base64 form with a marker. Best effort by design: an exact or
-# base64 occurrence is caught, a laundered one is not. Masks shorter
-# than four characters are skipped; masking a tiny string would shred
-# the output.
+# Line oriented masking filter. Replaces exact occurrences of this request's
+# admitted value secrets with a marker. Best effort by design: a transformed
+# occurrence is not the value we were handed and is not caught. Masks shorter
+# than four characters are skipped; masking a tiny string would shred the
+# output.
 function _dls_mask {
     typeset _dls_line _dls_value
     # The read/print split keeps the stream byte-faithful: a masked stream must
@@ -279,7 +279,7 @@ function _dls_run_execute {
                     # `$request_dir` is its private scratch. The global caches
                     # belong to the server, not command code; sibling masker
                     # forks retain their copies of the mask list.
-                    unset _dls_cache _dls_cache_b64 _dls_masks
+                    unset _dls_cache _dls_masks
                     typeset request_dir=$_dls_request
                     ":dls:${name}" "$@"
                 )
@@ -302,11 +302,11 @@ function _dls_run_execute {
 # Shape is declared, not discovered. `dls_secrets` names a value and
 # `dls_files` names a file, and both arrive in the same `$secret` map so a
 # command body reads one thing and writes the same assignment prefix either
-# way. The cache holds bytes and forms no opinion about them, because it
-# cannot form an honest one: two commands may want the same vault entry in
-# different shapes, and any type the cache carried would be wrong for one of
-# them. The judgment therefore happens here, filling this command's map,
-# which is the only place we know what this command asked for.
+# way. The cache holds one encoded representation and forms no opinion about
+# delivery shape: two commands may want the same vault entry in different
+# shapes, and any type the cache carried would be wrong for one of them. The
+# judgment therefore happens here, filling this command's map, which is the
+# only place we know what this command asked for.
 #
 # `$_dls_request` is this request's private directory, created by the caller.
 # Files materialize into it named for their key, so an environment dump reads
@@ -369,18 +369,13 @@ function _dls_resolve_secrets {
         return 69
     fi
 
-    # Fill the map, and assemble this request's masks while we are here. The
-    # mask list is exactly this command's own values and their base64 forms,
-    # longest first.
+    # Decode through the cache's one content exit, fill the map, and assemble
+    # this request's masks while we are here. The mask list is exactly this
+    # command's own values, longest first.
     #
     # Own values only, because concealing a value a command was never given
     # turns the filter into an oracle: print a guess, watch it come back
     # concealed, and you have learned something about a secret you never held.
-    #
-    # Their base64 forms, because HTTP Basic authentication encodes user and
-    # token into the Authorization header and `curl -v` prints that header. A
-    # token that never appears raw appears encoded in the most ordinary
-    # debugging session there is.
     #
     # Longest first, because masks are applied in order with a plain
     # substitution: a shorter value that is a prefix of a longer one consumes
@@ -390,17 +385,15 @@ function _dls_resolve_secrets {
     typeset _dls_value _dls_path
     for _dls_key in ${(ok)_dls_references}; do
         _dls_reference=${_dls_references[${_dls_key}]}
-        _dls_value=${_dls_cache[${_dls_reference}]}
         if [[ ${_dls_shapes[${_dls_key}]} = file ]]; then
             _dls_path=$_dls_request/$_dls_key
-            if ! print -rn -- "$_dls_value" > $_dls_path; then
-                REPLY="dls: unable to write dls_files[${_dls_name}:${_dls_key}] to $_dls_path"
-                return 69
-            fi
+            dls_decode file $_dls_reference $_dls_path
             chmod 600 $_dls_path 2>/dev/null
             secret[${_dls_key}]=$_dls_path
             continue
         fi
+        dls_decode value $_dls_reference
+        _dls_value=$REPLY
         # A newline survives an environment variable perfectly well. We refuse
         # it anyway: it is the tell that this was meant to be a file, and a path
         # in an environment dump is a path into a directory nothing can
@@ -417,7 +410,6 @@ function _dls_resolve_secrets {
         fi
         secret[${_dls_key}]=$_dls_value
         _dls_keyed+=( "${#_dls_value}:$_dls_value" )
-        _dls_keyed+=( "${#_dls_cache_b64[${_dls_reference}]}:${_dls_cache_b64[${_dls_reference}]}" )
     done
     _dls_masks=( "${(@)${(@On)_dls_keyed}#*:}" )
     return 0
@@ -516,14 +508,13 @@ function _dls_control_clear {
             fi
             reference=$REPLY
             if (( ${+_dls_cache[$reference]} )); then
-                unset "_dls_cache[$reference]" "_dls_cache_b64[$reference]"
+                unset "_dls_cache[$reference]"
                 (( cleared++ ))
             fi
         done
     else
         cleared=${#_dls_cache}
         _dls_cache=()
-        _dls_cache_b64=()
     fi
     _dls_reply $conn "$out" "$err" $(( failures != 0 )) \
         "dls: cleared $cleared; ${#_dls_cache} cached"$'\n' "$errtext"
@@ -663,7 +654,7 @@ function :execute:serve {
 
     _dls_bind_functions
 
-    typeset -gA _dls_cache=() _dls_cache_b64=()
+    typeset -gA _dls_cache=()
     typeset -ga _dls_masks=()
     typeset -gi _dls_running=1 _dls_started=$EPOCHSECONDS _dls_listen=-1
 

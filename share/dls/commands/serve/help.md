@@ -19,11 +19,14 @@ code receives its path in the same associative array. The request directory is
 removed when the command finishes. A value containing a newline or null byte is
 refused rather than silently changing shape.
 
-Secrets are fetched from 1Password with `op read` on first use and cached in
-server memory. All cold secrets for one command are fetched under one biometric
-authorization, then the `op` session is signed out and left cold again. Because
-fetches are rare, each authorization prompt stays a deliberate event: an
-unexpected prompt is an alarm, not an inconvenience.
+Secrets are fetched from 1Password with `op read` on first use, encoded
+directly into canonical single-line base64, and cached in server memory. Every
+content read from the cache passes through one decoder before becoming a value
+or a request file; the request interface does not expose the encoded
+representation. All cold secrets for one command are fetched under one
+biometric authorization, then the `op` session is signed out and left cold
+again. Because fetches are rare, each authorization prompt stays a deliberate
+event: an unexpected prompt is an alarm, not an inconvenience.
 
 All command and library code registered at startup is loaded before the socket
 binds. New or edited code is inert until a human restarts the server; the
@@ -37,10 +40,10 @@ admitted by the gate can explicitly register or source additional functions at
 runtime; that action is part of the approved code's behavior and is not a hot
 reload performed by dls.
 
-Command output is masked line by line against the value secrets admitted to
-that request and their exact base64 forms. Exact masks shorter than four
-characters are skipped. File contents, transformed values, and output written
-anywhere other than stdout or stderr are outside that filter.
+Command output is masked line by line against the decoded value secrets
+admitted to that request. Exact masks shorter than four characters are skipped.
+File contents, transformed values, and output written anywhere other than
+stdout or stderr are outside that filter.
 
 Stopping the server leaves command process trees already in flight to finish.
 A newly started server cleans the shared files root before listening, so an old
