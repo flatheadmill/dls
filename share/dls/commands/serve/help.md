@@ -8,9 +8,16 @@ Display help for `dls serve`.
 that are not allowed to read them. Clients invoke commands; the server runs each
 command in a background process tree with its configured secrets available to
 loaded command code as a non-exported associative array. Command code explicitly
-places selected values in the environment of the external command that needs
-them. Output streams through client provided fifos. Secret values never cross
-the socket, appear on a command line, or rest in a file.
+places selected values or paths in the environment of the external command that
+needs them. Output streams through client-provided fifos. Secret content never
+crosses the socket or appears on a command line.
+
+Configuration declares each secret's delivery shape. A `dls_secrets` entry is
+a value held in memory. A `dls_files` entry is materialized at mode 0600 inside
+a fresh request directory below a mode-0300, non-enumerable files root; command
+code receives its path in the same associative array. The request directory is
+removed when the command finishes. A value containing a newline or null byte is
+refused rather than silently changing shape.
 
 Secrets are fetched from 1Password with `op read` on first use and cached in
 server memory. All cold secrets for one command are fetched under one biometric
@@ -23,14 +30,21 @@ binds. New or edited code is inert until a human restarts the server; the
 restart is the approval gate through which agent authored code gains access to
 secrets. A missing helper or one with a syntax error aborts startup rather than
 remaining a deferred failure on first use: that refusal is the gate working.
-`dls status` reports files that have changed on disk since load.
+`dls status` reports drift in the source set recorded at startup.
 
 The gate covers functions registered when the server starts. Code already
 admitted by the gate can explicitly register or source additional functions at
 runtime; that action is part of the approved code's behavior and is not a hot
 reload performed by dls.
 
-Command output is masked line by line against every cached secret value and its
-base64 form, best effort.
+Command output is masked line by line against the value secrets admitted to
+that request and their exact base64 forms. Exact masks shorter than four
+characters are skipped. File contents, transformed values, and output written
+anywhere other than stdout or stderr are outside that filter.
+
+Stopping the server leaves command process trees already in flight to finish.
+A newly started server cleans the shared files root before listening, so an old
+in-flight command cannot rely on a request-scoped file path surviving an
+immediate stop and restart.
 ## OPTIONS
 > options

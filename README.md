@@ -26,13 +26,28 @@ The reference goes on a command line. The value comes back into a shell variable
 
 ## How it works
 
-`dls` inverts the delivery problem. The secret does not travel to the process; the process comes to the secret.
+`dls` inverts the delivery problem. The secret does not travel to the client;
+the operation comes to the secret.
 
-A server runs outside the sandbox holding values in memory, fetched from 1Password on first use and cached. A client names a command over a Unix domain socket, and the server runs that command where the cache already lives, streaming output back through fifos the client created. The value's whole journey is `op read` into server memory and then an assignment prefix on the environment of the one child that needs it.
+A server runs outside the sandbox holding secrets in memory, fetched from
+1Password on first use and cached. A client names a command over a Unix domain
+socket, and the server runs that command where the cache already lives,
+streaming output back through fifos the client created. The socket carries the
+request and completion record, never secret content or command output.
 
-It never crosses the socket. It never appears in `argv`. It never rests in a file. And — the part that matters most for the threat above — it never enters the assistant's context at all. What appears in the transcript is `dls gh pr list`.
+Configuration declares how each secret is delivered. A value stays in memory
+and reaches the one external process that needs it through an assignment
+prefix, never through `argv`. A file is materialized at mode 0600 inside a
+fresh request directory below a non-enumerable mode-0300 root; the external
+process receives that path, and the request removes the file when it finishes.
+In both cases the ordinary transcript contains the operation — for example,
+`dls gh pr list` — rather than a secret-fetching ceremony.
 
-Output is filtered on the way back, line by line, against every cached value and its base64 form, so a command that prints a secret by accident prints `<concealed by dls>` instead.
+Output is filtered on the way back, line by line, against the value secrets
+admitted to that request and their exact base64 forms. An exact occurrence of
+a mask at least four characters long becomes `<concealed by dls>`. File
+contents are not masks: exact substitution cannot protect structured material
+that a program may parse or reformat.
 
 ## Why Zsh
 
@@ -56,9 +71,21 @@ If your own program needs secrets, it should not need anything significant, and 
 
 ## What it promises
 
-`dls` promises what its architecture can keep. A brokered value does not cross the socket, does not appear on a command line, does not rest on disk, and does not enter your terminal. An exact occurrence of a cached value in a command's output is caught by the filter. A command cannot read another command's secret out of the server's cache. Code that a human has not approved by restarting the server does not run — though code that was approved is trusted entirely, and may load more of its own once it is running.
+`dls` promises what its architecture can keep. A brokered value does not cross
+the socket, does not appear on a command line, and does not rest on disk. A
+brokered file is exposed only as a request-scoped path below the
+non-enumerable files root. An exact raw or base64 occurrence of an admitted
+value in that request's stdout or stderr is caught by the filter when the mask
+is at least four characters long. A command cannot read another command's
+secret out of the server's cache. Code that a human has not approved by
+restarting the server does not run — though code that was approved is trusted
+entirely, and may load more of its own once it is running.
 
-It does not promise to outwit creative logging. A tool that splits a token on hyphens before printing it, or writes its own environment to a debug file, defeats the filter — and that is a defect in the tool, to be fixed or excised, not something this broker will chase. The filter catches exact occurrences and their base64 form; it is not a laundering detector.
+It does not promise to outwit creative logging. A tool that splits a token on
+hyphens before printing it, writes its environment to a debug file, or prints
+a brokered file defeats the output wall — and that is a defect in the tool, to
+be fixed or excised, not something this broker will chase. The filter catches
+exact occurrences and their exact base64 form; it is not a laundering detector.
 
 The discipline is offered rather than enforced, the same way `chmod` is offered. Nothing stops you writing a command that gives everything away. `chmod` will let you `777` your home directory too, and it will not lecture you first.
 
@@ -76,9 +103,17 @@ Point a command at a vault entry in `~/.config/dls/config.zsh`:
 
 ```zsh
 dls_secrets[gh:token]=Private/github/token
+dls_files[gcloud:GOOGLE_APPLICATION_CREDENTIALS]=Private/gcloud/key
 ```
 
 A reference is `vault/item/field`. The `op://` prefix is accepted, since that is what 1Password hands you when you copy one, but it carries no information in a file where every value is a reference.
+
+The configuration table declares the delivery shape. A `dls_secrets` entry is
+a value in the command's non-exported `secret` map. A `dls_files` entry is a
+path in that same map, named for the secret key inside the request directory.
+A key may not be declared in both tables. A value containing a newline or null
+byte is refused rather than silently changing shape; declare file-shaped
+material in `dls_files`.
 
 Then use it:
 
@@ -88,9 +123,14 @@ dls gh pr list
 
 The first call fetches from 1Password, which is a deliberate event — an unexpected authorization prompt is an alarm, not an inconvenience. Later calls are served warm from memory.
 
-`dls status` reports what the server holds, what it loaded, and which of those files have changed on disk since. Editing command code does nothing until you restart, and that restart is the review.
+`dls status` reports what the server holds, what it loaded, and drift in the
+source set recorded at startup. Editing loaded command or helper code does
+nothing until you restart, and that restart is the review.
 
-Today `dls` brokers single-line values. Credentials that 1Password stores as files are not yet supported.
+File paths live only for their request. Stopping the server lets command
+processes already in flight finish, but a newly started server cleans the
+shared files root. An old in-flight command must therefore not expect its file
+paths to survive an immediate stop and restart.
 
 ## Tests
 
