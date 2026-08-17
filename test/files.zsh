@@ -4,12 +4,12 @@
 # directory, delivered to the command as a path rather than a value.
 #
 # The suite checks the three things that make that a real facility rather than
-# a convenience. The bytes arrive intact, including the trailing newline that
-# a certificate owns and that nothing along the path is allowed to trim. The
-# directory they land in cannot be enumerated, which is the whole of the
-# file-side mechanism — a recursive sweep stops at `opendir` while a program
-# handed the exact path opens it and notices nothing. And the directory does
-# not outlive the request that made it.
+# a convenience. Text arrives intact, including the trailing newline that a
+# certificate owns, and a NUL-bearing file exercises byte-preserving delivery
+# rather than text-only delivery. The directory they land in cannot be
+# enumerated, which is the whole of the file-side mechanism — a recursive sweep
+# stops at `opendir` while a program handed the exact path opens it and notices
+# nothing. And the directory does not outlive the request that made it.
 #
 # It also checks the two refusals, which exist for different reasons and are
 # worth keeping distinct. A newline in a value survives an environment
@@ -78,6 +78,7 @@ function :args:holder { eval "$(args -- -- "$@")" }
 function :execute:holder { dls_execute "$@" }
 
 : ${dls_files[holder:CERT]:=Vault/item/cert}
+: ${dls_files[holder:BINARY]:=Vault/item/nulled}
 : ${dls_secrets[holder:token]:=Vault/item/token}
 
 function :dls:holder {
@@ -87,6 +88,7 @@ function :dls:holder {
     print -r -- "path-basename: ${secret[CERT]:t}"
     print -r -- "file-exists: $([[ -f $secret[CERT] ]] && print yes || print no)"
     print -r -- "file-bytes: $(wc -c < $secret[CERT] | tr -d ' ')"
+    print -r -- "binary-bytes: $(wc -c < $secret[BINARY] | tr -d ' ')"
     print -r -- "file-mode: $(zstat +mode -s $secret[CERT] 2>/dev/null || stat -f '%Sp' $secret[CERT])"
     print -r -- "value-arrived: $([[ $secret[token] = plain-token-value ]] && print yes || print no)"
     # Hand the path and the directory out so the suite can inspect both after
@@ -94,6 +96,7 @@ function :dls:holder {
     print -rn -- "$secret[CERT]" > ${PROBE_OUT:?}.path
     print -rn -- "$request_dir" > ${PROBE_OUT:?}.dir
     cp $secret[CERT] ${PROBE_OUT:?}.copy
+    cp $secret[BINARY] ${PROBE_OUT:?}.binary
 }
 EOF
 
@@ -151,6 +154,7 @@ integer server=0
     # The trailing newline is the byte a careless path trims, so it is the one
     # worth counting: the body is 53 bytes and must arrive as 53.
     assert 'the file keeps every byte, trailing newline included' 'file-bytes: 53' "$out"
+    assert 'a NUL-bearing file keeps every byte' 'binary-bytes: 9' "$out"
     assert 'the file is not readable by anyone else' 'file-mode: -rw-------' "$out"
 
     typeset dir=$(cat $PROBE_OUT.dir 2>/dev/null)
@@ -161,6 +165,13 @@ integer server=0
         print -r -- 'ok: the bytes are the bytes op returned'
     else
         print -r -- 'FAIL: the materialized file differs from the source'
+        (( failures++ ))
+    fi
+
+    if printf -- 'head\000tail' | cmp -s - $PROBE_OUT.binary; then
+        print -r -- 'ok: binary file bytes survive the cache'
+    else
+        print -r -- 'FAIL: binary file bytes differ from the source'
         (( failures++ ))
     fi
 
@@ -193,6 +204,8 @@ integer server=0
     assert 'the newline refusal names the entry and the remedy' \
         'newline in dls_secrets[badvalue:body]: declare it in dls_files' "$err"
 
+    # `nulled` is already warm from its file delivery above. Decoding that same
+    # canonical cache entry as a value must reach the value-shape refusal.
     out=$(dls badnul 2> $home/err)
     code=$?
     err=$(cat $home/err 2>/dev/null)

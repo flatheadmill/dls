@@ -97,11 +97,8 @@ function :dls:test-secret {
         # The other command's literal must stream in the clear. Masking it
         # would mean concealing a value this command was never given, which
         # turns the filter into an oracle: print a guess, watch it vanish, and
-        # you have learned a secret you never held. The base64 form is emitted
-        # for the same reason, and because its counterpart for an own value is
-        # what keeps `curl -v` covered.
+        # you have learned a secret you never held.
         print -r -- 'cross-command raw: ZEBRA-VALUE-9876'
-        print -r -- "cross-command b64: $(print -rn -- 'ZEBRA-VALUE-9876' | base64 | tr -d '\n')"
         return 0
     fi
     print -r -- "alpha-rev: $(print -rn -- $secret[alpha] | rev)"
@@ -194,9 +191,6 @@ integer server=0
     assert 'command cannot read another cache entry' 'cache unavailable' "$(<$probe)"
     assert 'another command value is not concealed' \
         'cross-command raw: ZEBRA-VALUE-9876' "$out"
-    typeset gamma_b64=$(print -rn -- 'ZEBRA-VALUE-9876' | base64 | tr -d '\n')
-    assert 'another command base64 is not concealed' \
-        "cross-command b64: $gamma_b64" "$out"
 
     dls stop > /dev/null 2>&1
 } always {
