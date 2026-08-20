@@ -9,9 +9,9 @@ zshctl[man_title]='DLS Manuals'
 #     dls_secrets[gh:token]=Private/github/token
 #     dls_files[gcloud:GOOGLE_APPLICATION_CREDENTIALS]=Private/gcloud/key
 #
-# A reference is `vault/item/field`. The `op://` prefix is accepted, since
-# that is what 1Password's own interface hands you, but it is noise in a
-# file where every value is an op reference and nothing else could be one.
+# DLS spells a reference `vault/item/field`. A leading `op://` is accepted when
+# it arrives from 1Password's copy-reference interface, but it is not part of
+# the DLS language.
 #
 typeset -gA dls=() dls_secrets=() dls_files=()
 
@@ -38,9 +38,9 @@ function :help {
         fetched from 1Password with `op read` and cached. Clients connect over a
         Unix domain socket and invoke commands; the server runs the command
         with its configured secrets in a non-exported shell map and replays the
-        output. Command code explicitly places selected values in the environment
-        of the external command that needs them. Secret values never cross the
-        socket, appear on a command line, or rest in a file.
+        output. Command code explicitly places selected values or file paths in
+        the environment of the external command that needs them. Secret content
+        never crosses the socket or appears on a command line.
 
         Each `dls` command is a `zshctl` extension command. The server loads
         all registered command and helper code at startup and never reloads;

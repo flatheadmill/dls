@@ -309,13 +309,12 @@ function _dls_run_execute {
 # only place we know what this command asked for.
 #
 # `$_dls_request` is this request's private directory, created by the caller.
-# Files materialize into it named for their key, so an environment dump reads
-# `GOOGLE_APPLICATION_CREDENTIALS=…/GOOGLE_APPLICATION_CREDENTIALS` and
-# documents itself at the moment of the accident.
+# dls_file preserves each file reference beneath it and returns that path; the
+# configuration key names only the entry in `$secret`.
 function _dls_resolve_secrets {
     typeset _dls_name=$1 _dls_entry _dls_command _dls_key _dls_reference
     typeset _dls_failure=''
-    typeset -A _dls_references=() _dls_shapes=()
+    typeset -A _dls_references=() _dls_shapes=() _dls_materialized=()
     integer _dls_attempted=0 _dls_failed=0
 
     # Parse on the rightmost colon: command names may themselves contain
@@ -382,14 +381,12 @@ function _dls_resolve_secrets {
     # its head and streams the tail in the clear. A rotated token cached beside
     # its predecessor is the mundane way into that, not an exotic one.
     typeset -a _dls_keyed=()
-    typeset _dls_value _dls_path
+    typeset _dls_value
     for _dls_key in ${(ok)_dls_references}; do
         _dls_reference=${_dls_references[${_dls_key}]}
         if [[ ${_dls_shapes[${_dls_key}]} = file ]]; then
-            _dls_path=$_dls_request/$_dls_key
-            dls_decode file $_dls_reference $_dls_path
-            chmod 600 $_dls_path 2>/dev/null
-            secret[${_dls_key}]=$_dls_path
+            dls_file $_dls_reference
+            secret[${_dls_key}]=$REPLY
             continue
         fi
         dls_decode value $_dls_reference
@@ -630,18 +627,6 @@ function :execute:serve {
             if [[ -z $_dls_command || -z $_dls_key ]]; then
                 abend 'fatal: invalid %s key %s: command and secret key must be nonempty' \
                     $_dls_table ${(qqq)_dls_entry}
-            fi
-            # A file key becomes a pathname component inside the request
-            # directory, so it has to be one name and not a path. Without this
-            # `../elsewhere` materializes outside the directory and survives a
-            # cleanup that removes only the directory it knows about. This is
-            # not general sanitizing; it is the condition that makes "named for
-            # its key, inside this directory" a true sentence.
-            if [[ $_dls_table = dls_files ]]; then
-                if [[ $_dls_key = */* || $_dls_key = . || $_dls_key = .. ]]; then
-                    abend 'fatal: invalid dls_files key %s: the secret key names a file and must be a single name' \
-                        ${(qqq)_dls_entry}
-                fi
             fi
             # One key cannot be both shapes. Both tables assign to the same
             # `$secret` entry, so whichever ran second would silently win.

@@ -2,10 +2,11 @@ emulate -L zsh
 
 # usage: dls_ref <reference>
 #
-# Normalize a secret reference into REPLY as op://vault/item/field. The
-# op:// prefix may be omitted. The field segment may itself contain a
-# section, op://vault/item/section/field. Returns non-zero and sets REPLY
-# to the empty string when the reference cannot be normalized.
+# DLS spells a reference vault/item/field. Normalize it into REPLY with the
+# internal op:// prefix required by 1Password and the cache. A copied op://
+# prefix may be supplied at input. The field segment may itself contain a
+# section, vault/item/section/field. Returns non-zero and sets REPLY to the
+# empty string when the reference cannot be normalized.
 
 
 typeset _dls_reference=${1:-}
@@ -16,6 +17,17 @@ typeset _dls_reference=${1:-}
 # — that would forbid the common op://vault/item/field. Each ?* also demands at
 # least one character, so empty segments are rejected.
 if [[ $_dls_reference != op://?*/?*/?* ]]; then
+    REPLY=''
+    return 1
+fi
+# The portion after op:// is also the path a file reference preserves beneath
+# its request directory. Empty, dot, and dot-dot components would either lose
+# that spelling or leave the request, so they are outside the DLS language for
+# values and files alike.
+typeset _dls_relative=${_dls_reference#op://}
+if [[ $_dls_relative = /* || $_dls_relative = */ ||
+      $_dls_relative = *//* || /$_dls_relative/ = */./* ||
+      /$_dls_relative/ = */../* ]]; then
     REPLY=''
     return 1
 fi

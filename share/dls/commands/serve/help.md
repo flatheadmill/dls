@@ -15,9 +15,11 @@ crosses the socket or appears on a command line.
 Configuration declares each secret's delivery shape. A `dls_secrets` entry is
 a value held in memory. A `dls_files` entry is materialized at mode 0600 inside
 a fresh request directory below a mode-0300, non-enumerable files root; command
-code receives its path in the same associative array. The request directory is
-removed when the command finishes. A value containing a newline or null byte is
-refused rather than silently changing shape.
+code receives its path in the same associative array. The path preserves the
+`vault/item/field` reference beneath the request directory; the configuration
+key names only the map entry. The request directory is removed when the command
+finishes. A value containing a newline or null byte is refused rather than
+silently changing shape.
 
 Secrets are fetched from 1Password with `op read` on first use, encoded
 directly into canonical single-line base64, and cached in server memory. Every

@@ -8,8 +8,9 @@ Display help for `dls fetch`.
 server memory. The whole batch rides a single 1Password authorization — one
 touch — and the session is signed out when the batch completes.
 
-A reference is `vault/item/field` or `op://vault/item/field`. The field
-segment may itself contain a section, `vault/item/section/field`.
+DLS spells a reference `vault/item/field`. A leading `op://` copied from
+1Password is accepted at input, but it is not part of the DLS language. The
+field segment may itself contain a section, `vault/item/section/field`.
 
 Fetching is otherwise lazy: the first command that needs a secret triggers a
 fetch and its authorization prompt. Warming the cache after a server restart

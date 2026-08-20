@@ -112,11 +112,14 @@ dls_secrets[gh:token]=Private/github/token
 dls_files[gcloud:GOOGLE_APPLICATION_CREDENTIALS]=Private/gcloud/key
 ```
 
-A reference is `vault/item/field`. The `op://` prefix is accepted, since that is what 1Password hands you when you copy one, but it carries no information in a file where every value is a reference.
+DLS spells a reference `vault/item/field`. A leading `op://` is accepted when
+it arrives from 1Password's copy-reference interface, but it is not part of the
+DLS language.
 
 The configuration table declares the delivery shape. A `dls_secrets` entry is
 a value in the command's non-exported `secret` map. A `dls_files` entry is a
-path in that same map, named for the secret key inside the request directory.
+path in that same map. The file preserves its `vault/item/field` reference
+beneath the request directory; the configuration key names only the map entry.
 A key may not be declared in both tables. A value containing a newline or null
 byte is refused rather than silently changing shape; declare file-shaped
 material in `dls_files`.

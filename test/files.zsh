@@ -55,7 +55,7 @@ case $1 in
     (op://Vault/item/cert)    printf -- '-----BEGIN CANARY-----\nLINE-ONE\n-----END CANARY-----\n' ;;
     (op://Vault/item/token)   print -rn -- 'plain-token-value' ;;
     (op://Vault/item/multi)   printf -- 'first\nsecond' ;;
-    (op://Vault/item/nulled)  printf -- 'head\000tail' ;;
+    (op://Vault/item/section/nulled) printf -- 'head\000tail' ;;
     (*) exit 1 ;;
     esac
     ;;
@@ -67,7 +67,7 @@ chmod +x $home/bin/op
 export PATH=$home/bin:$PATH
 
 typeset ext=$home/.local/share/dls/extensions/probe
-mkdir -p $ext/commands/{holder,badvalue,badnul}
+mkdir -p $ext/commands/{holder,badvalue,badnul,badpath}
 
 cat > $ext/commands/holder/command.zsh <<'EOF'
 function :help:holder { heredoc -v help <<'    HELP'
@@ -78,14 +78,18 @@ function :args:holder { eval "$(args -- -- "$@")" }
 function :execute:holder { dls_execute "$@" }
 
 : ${dls_files[holder:CERT]:=Vault/item/cert}
-: ${dls_files[holder:BINARY]:=Vault/item/nulled}
+: ${dls_files[holder:CERT_AGAIN]:=Vault/item/cert}
+: ${dls_files[holder:BINARY]:=Vault/item/section/nulled}
 : ${dls_secrets[holder:token]:=Vault/item/token}
 
 function :dls:holder {
     # Report facts about the path rather than its content, so the suite can
     # check the file without the body printing a secret it was handed.
     print -r -- "path-is-absolute: ${${secret[CERT]}[1]}"
+    print -r -- "reference-path: ${secret[CERT]#$request_dir/}"
+    print -r -- "section-path: ${secret[BINARY]#$request_dir/}"
     print -r -- "path-basename: ${secret[CERT]:t}"
+    print -r -- "same-file-path: $([[ $secret[CERT] = $secret[CERT_AGAIN] ]] && print yes || print no)"
     print -r -- "file-exists: $([[ -f $secret[CERT] ]] && print yes || print no)"
     print -r -- "file-bytes: $(wc -c < $secret[CERT] | tr -d ' ')"
     print -r -- "binary-bytes: $(wc -c < $secret[BINARY] | tr -d ' ')"
@@ -118,8 +122,19 @@ function :help:badnul { heredoc -v help <<'    HELP'
 }
 function :args:badnul { eval "$(args -- -- "$@")" }
 function :execute:badnul { dls_execute "$@" }
-: ${dls_secrets[badnul:body]:=Vault/item/nulled}
+: ${dls_secrets[badnul:body]:=Vault/item/section/nulled}
 function :dls:badnul { print -r -- 'badnul ran' }
+EOF
+
+cat > $ext/commands/badpath/command.zsh <<'EOF'
+function :help:badpath { heredoc -v help <<'    HELP'
+        # desc -- a traversal component in a file reference
+    HELP
+}
+function :args:badpath { eval "$(args -- -- "$@")" }
+function :execute:badpath { dls_execute "$@" }
+: ${dls_files[badpath:body]:=Vault/item/../nulled}
+function :dls:badpath { print -r -- 'badpath ran' }
 EOF
 
 function dls {
@@ -147,7 +162,11 @@ integer server=0
     out=$(dls holder 2> $home/err)
     code=$?
     assert 'a file secret arrives as an absolute path' 'path-is-absolute: /' "$out"
-    assert 'the file is named for its key' 'path-basename: CERT' "$out"
+    assert 'a file path preserves its reference' 'reference-path: Vault/item/cert' "$out"
+    assert 'a section remains a path component' \
+        'section-path: Vault/item/section/nulled' "$out"
+    assert 'the file is named for its field' 'path-basename: cert' "$out"
+    assert 'two keys for one reference receive one path' 'same-file-path: yes' "$out"
     assert 'the file exists while the command runs' 'file-exists: yes' "$out"
     assert 'a value secret still arrives as a value' 'value-arrived: yes' "$out"
 
@@ -217,6 +236,24 @@ integer server=0
     fi
     assert 'the null refusal names the entry and the remedy' \
         'null byte in dls_secrets[badnul:body]: declare it in dls_files' "$err"
+
+    out=$(dls badpath 2> $home/err)
+    code=$?
+    err=$(cat $home/err 2>/dev/null)
+    if (( code == 69 )); then
+        print -r -- 'ok: a traversal component fails the resolve'
+    else
+        print -r -- "FAIL: a traversal component exited $code, wanted 69"
+        (( failures++ ))
+    fi
+    assert 'the traversal refusal names the invalid file reference' \
+        'invalid secret reference in dls_files[badpath:body]' "$err"
+    if [[ $out = *'badpath ran'* ]]; then
+        print -r -- 'FAIL: the traversal command ran'
+        (( failures++ ))
+    else
+        print -r -- 'ok: the traversal command did not run'
+    fi
 
     dls stop > /dev/null 2>&1
 } always {
