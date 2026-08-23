@@ -1,0 +1,17 @@
+emulate -L zsh
+
+# Run one op CLI command without handing a daemon any of the server's internal
+# descriptors. Preserve only stdin, stdout, and stderr, which are the command's
+# intended interface. `/dev/fd` gives us the inherited set rather than a
+# guessed ceiling or a list of today's plumbing descriptors.
+(
+    typeset _dls_fd_path
+    integer _dls_fd
+    for _dls_fd_path in /dev/fd/<3->(N); do
+        _dls_fd=${_dls_fd_path:t}
+        # Zsh protects descriptors it still needs internally and closes those
+        # itself when it executes the external command.
+        { exec {_dls_fd}>&- } 2>/dev/null
+    done
+    command op "$@"
+)

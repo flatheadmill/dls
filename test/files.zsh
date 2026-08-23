@@ -77,10 +77,10 @@ function :help:holder { heredoc -v help <<'    HELP'
 function :args:holder { eval "$(args -- -- "$@")" }
 function :execute:holder { dls_execute "$@" }
 
-: ${dls_files[holder:CERT]:=Vault/item/cert}
-: ${dls_files[holder:CERT_AGAIN]:=Vault/item/cert}
-: ${dls_files[holder:BINARY]:=Vault/item/section/nulled}
-: ${dls_secrets[holder:token]:=Vault/item/token}
+: ${dls_files[holder:CERT]:=Test/Vault/item/cert}
+: ${dls_files[holder:CERT_AGAIN]:=Test/Vault/item/cert}
+: ${dls_files[holder:BINARY]:=Test/Vault/item/section/nulled}
+: ${dls_secrets[holder:token]:=Test/Vault/item/token}
 
 function :dls:holder {
     # Report facts about the path rather than its content, so the suite can
@@ -111,7 +111,7 @@ function :help:badvalue { heredoc -v help <<'    HELP'
 }
 function :args:badvalue { eval "$(args -- -- "$@")" }
 function :execute:badvalue { dls_execute "$@" }
-: ${dls_secrets[badvalue:body]:=Vault/item/multi}
+: ${dls_secrets[badvalue:body]:=Test/Vault/item/multi}
 function :dls:badvalue { print -r -- 'badvalue ran' }
 EOF
 
@@ -122,7 +122,7 @@ function :help:badnul { heredoc -v help <<'    HELP'
 }
 function :args:badnul { eval "$(args -- -- "$@")" }
 function :execute:badnul { dls_execute "$@" }
-: ${dls_secrets[badnul:body]:=Vault/item/section/nulled}
+: ${dls_secrets[badnul:body]:=Test/Vault/item/section/nulled}
 function :dls:badnul { print -r -- 'badnul ran' }
 EOF
 
@@ -133,7 +133,7 @@ function :help:badpath { heredoc -v help <<'    HELP'
 }
 function :args:badpath { eval "$(args -- -- "$@")" }
 function :execute:badpath { dls_execute "$@" }
-: ${dls_files[badpath:body]:=Vault/item/../nulled}
+: ${dls_files[badpath:body]:=Test/Vault/item/../nulled}
 function :dls:badpath { print -r -- 'badpath ran' }
 EOF
 
@@ -162,9 +162,9 @@ integer server=0
     out=$(dls holder 2> $home/err)
     code=$?
     assert 'a file secret arrives as an absolute path' 'path-is-absolute: /' "$out"
-    assert 'a file path preserves its reference' 'reference-path: Vault/item/cert' "$out"
+    assert 'a file path preserves its reference' 'reference-path: Test/Vault/item/cert' "$out"
     assert 'a section remains a path component' \
-        'section-path: Vault/item/section/nulled' "$out"
+        'section-path: Test/Vault/item/section/nulled' "$out"
     assert 'the file is named for its field' 'path-basename: cert' "$out"
     assert 'two keys for one reference receive one path' 'same-file-path: yes' "$out"
     assert 'the file exists while the command runs' 'file-exists: yes' "$out"

@@ -47,6 +47,11 @@ chmod +x $home/bin/op
 export PATH=$home/bin:$PATH
 export OP_FAKE_STATE=$home/op-state
 
+mkdir -p $home/.config/dls
+cat > $home/.config/dls/config.zsh <<'EOF'
+dls_secrets[gh:token]=Test/Private/github/token
+EOF
+
 # The boundary fixtures below are real gh registrations, so this suite needs a
 # real gh. Refuse rather than skip: a run that quietly omits the alias and
 # extension assertions would report PASS while proving nothing about the one
@@ -160,7 +165,7 @@ typeset malformed_home=$home/malformed-home
 typeset malformed_socket=$home/malformed.socket
 mkdir -p $malformed_home/.config/dls
 cat > $malformed_home/.config/dls/config.zsh <<'EOF'
-dls_secrets[badkey]=op://Private/item/field
+dls_secrets[badkey]=Test/Private/item/field
 EOF
 typeset malformed_out
 malformed_out=$(HOME=$malformed_home DLS_SOCKET=$malformed_socket \
@@ -367,6 +372,12 @@ integer server=0
     err=$(<$home/err)
     assert_code 'invalid fetch reference fails' 1 $code
     assert 'invalid fetch reference message' 'invalid secret reference' "$err"
+
+    out=$(dls fetch op://Private/github/token 2> $home/err)
+    code=$?
+    err=$(<$home/err)
+    assert_code 'op reference is not a DLS reference' 1 $code
+    assert 'op reference rejection is explained' 'invalid secret reference' "$err"
 
     out=$(dls clear 2> $home/err)
     assert_code 'clear exits zero' 0 $?

@@ -108,7 +108,7 @@ function :execute:task {
     dls_execute "$@"
 }
 
-: ${dls_secrets[task:token]:=Vault/item/token}
+: ${dls_secrets[task:token]:=Test/Vault/item/token}
 
 function :dls:task {
     task_helper
@@ -126,8 +126,8 @@ EOF
 cat > $ext/functions/dls_ref <<'EOF'
 print -rn -- 'dls_ref' > ${GATE_MARK:?}.shadow
 typeset _dls_reference=${1:-}
-[[ $_dls_reference = op://* ]] || _dls_reference=op://$_dls_reference
-if [[ $_dls_reference != op://?*/?*/?* ]]; then
+if [[ $_dls_reference != ?*/?*/?*/?* || $_dls_reference = *//* ||
+      /$_dls_reference/ = */./* || /$_dls_reference/ = */../* ]]; then
     REPLY=''
     return 1
 fi

@@ -1,7 +1,7 @@
 emulate -L zsh -o pipefail -o no_multibyte
 
-# usage: dls_decode value <normalized-reference>
-#        dls_decode file <normalized-reference> <path>
+# usage: dls_decode value <validated-reference>
+#        dls_decode file <validated-reference> <path>
 #
 # This is the only content exit from the server cache. The cache holds one
 # representation, canonical base64, and every delivery decodes it. Value

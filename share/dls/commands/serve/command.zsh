@@ -313,9 +313,11 @@ function _dls_run_execute {
 # configuration key names only the entry in `$secret`.
 function _dls_resolve_secrets {
     typeset _dls_name=$1 _dls_entry _dls_command _dls_key _dls_reference
+    typeset _dls_account
     typeset _dls_failure=''
     typeset -A _dls_references=() _dls_shapes=() _dls_materialized=()
-    integer _dls_attempted=0 _dls_failed=0
+    typeset -aU _dls_attempted_accounts=()
+    integer _dls_failed=0
 
     # Parse on the rightmost colon: command names may themselves contain
     # colons, while secret keys may not.
@@ -344,14 +346,16 @@ function _dls_resolve_secrets {
         _dls_shapes[${_dls_key}]=file
     done
 
-    # All references are now known good. Fetch every cold value under one op
-    # authorization, then close that session once; warm-only calls never sign
-    # out. Do not expose a partial map if any fetch fails.
+    # All references are now known good. Fetch every cold value through its
+    # named account, then sign out each account contacted by the batch once.
+    # Warm-only calls never sign out. Do not expose a partial map if any fetch
+    # fails.
     {
         for _dls_key in ${(ok)_dls_references}; do
             _dls_reference=${_dls_references[${_dls_key}]}
             (( ${+_dls_cache[${_dls_reference}]} )) && continue
-            (( _dls_attempted++ ))
+            _dls_account=${_dls_reference%%/*}
+            _dls_attempted_accounts+=( $_dls_account )
             if ! dls_fetch "$_dls_reference"; then
                 typeset _dls_table=dls_secrets
                 [[ ${_dls_shapes[${_dls_key}]} = file ]] && _dls_table=dls_files
@@ -361,7 +365,9 @@ function _dls_resolve_secrets {
             fi
         done
     } always {
-        (( _dls_attempted )) && dls_signout
+        for _dls_account in "${(@)_dls_attempted_accounts}"; do
+            dls_signout $_dls_account
+        done
     }
     if (( _dls_failed )); then
         REPLY=$_dls_failure
@@ -459,8 +465,9 @@ function _dls_control_fetch {
             $'dls: missing argument: fetch requires at least one secret reference\n'
         return
     fi
-    typeset REPLY reference outtext='' errtext=''
-    integer failures=0 attempted=0
+    typeset REPLY reference account outtext='' errtext=''
+    typeset -aU attempted_accounts=()
+    integer failures=0
     {
         for reference in "$@"; do
             if ! dls_ref $reference; then
@@ -473,7 +480,8 @@ function _dls_control_fetch {
                 outtext+="cached: $reference"$'\n'
                 continue
             fi
-            (( attempted++ ))
+            account=${reference%%/*}
+            attempted_accounts+=( $account )
             if dls_fetch $reference; then
                 outtext+="fetched: $reference"$'\n'
             else
@@ -482,10 +490,10 @@ function _dls_control_fetch {
             fi
         done
     } always {
-        # One authorization covered the whole batch; close the session.
-        if (( attempted )); then
-            dls_signout
-        fi
+        # Each account contacted by the batch closes once.
+        for account in "${(@)attempted_accounts}"; do
+            dls_signout $account
+        done
     }
     _dls_reply $conn "$out" "$err" $(( failures != 0 )) "$outtext" "$errtext"
 }

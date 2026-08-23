@@ -141,20 +141,20 @@ $ chmod 600 ~/.config/dls/config.zsh
 ```
 
 ```zsh
-dls_secrets[project-list:token]=Personal/example/token
+dls_secrets[project-list:token]=Personal/Example/service/token
 ```
 
-The key is `<operation>:<map-key>`. The value is a DLS reference written as `vault/item/field`. A leading `op://` copied from 1Password is accepted, but it is not part of the DLS reference language. A section remains another path component: `vault/item/section/field`.
+The key is `<operation>:<map-key>`. The value is a DLS reference written as `account/vault/item/field`. The first component selects a 1Password account; the remaining path becomes `op://vault/item/field` at the `op` boundary. Use an account shorthand configured in 1Password CLI. A section remains another path component: `account/vault/item/section/field`.
 
 `dls_secrets` admits a decoded scalar to the command's request-local `secret` map. Use it for a token or password that the external program accepts in an environment variable.
 
 `dls_files` admits an absolute path instead:
 
 ```zsh
-dls_files[project-list:credentials]=Personal/example/key.pem
+dls_files[project-list:credentials]=Personal/Example/service/key.pem
 ```
 
-The server decodes the bytes directly into a mode-0600 request file. Its path preserves `vault/item/field` beneath a private request directory, and the file is removed when the operation finishes. Command code passes the returned path to the external program:
+The server decodes the bytes directly into a mode-0600 request file. Its path preserves `account/vault/item/field` beneath a private request directory, and the file is removed when the operation finishes. Command code passes the returned path to the external program:
 
 ```zsh
 EXAMPLE_CREDENTIALS=$secret[credentials] command examplectl projects list
@@ -178,7 +178,7 @@ All registered command and helper bodies are resolved before the socket binds. C
 
 Code already approved at startup is trusted. If its reviewed behavior explicitly sources another file at runtime, DLS does not try to prevent that.
 
-The first cold operation may ask the human to authorize 1Password. Subsequent uses of the same reference are served from the in-memory cache. DLS signs out of the 1Password CLI session after each cold batch so a later fetch is another deliberate authorization.
+The first cold operation may ask the human to authorize each 1Password account it uses. Subsequent uses of the same reference are served from the in-memory cache. DLS signs out each account contacted by a cold batch so a later fetch is another deliberate authorization.
 
 Commands run with standard input connected to `/dev/null`. Design them to be non-interactive. They run in the client's current working directory when that directory is available to the server.
 
@@ -186,14 +186,14 @@ Commands run with standard input connected to `/dev/null`. Design them to be non
 
 ```console
 $ dls status
-$ dls fetch Personal/example/token
-$ dls clear Personal/example/token
+$ dls fetch Personal/Example/service/token
+$ dls clear Personal/Example/service/token
 $ dls stop
 ```
 
 `dls status` reports the running server's socket, process, start time, loaded operation names, cached references, and source drift. It never reports cached values. It is not operation help; each operation should implement a useful `--help` contract on its client half.
 
-`dls fetch` warms one or more references in a single authorization. Fetching is otherwise lazy. `dls clear` evicts named references, or the entire cache when called without arguments. Rotation does not require a restart: rotate the credential, update 1Password, and clear that reference. `dls stop` removes the socket and lets already-running operations finish.
+`dls fetch` warms one or more references, authorizing each account the batch needs. Fetching is otherwise lazy. `dls clear` evicts named references, or the entire cache when called without arguments. Rotation does not require a restart: rotate the credential, update 1Password, and clear that reference. `dls stop` removes the socket and lets already-running operations finish.
 
 ## What DLS guarantees
 

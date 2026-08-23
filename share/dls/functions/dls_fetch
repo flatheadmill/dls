@@ -1,6 +1,6 @@
 emulate -L zsh
 
-# usage: dls_fetch <normalized-reference>
+# usage: dls_fetch <validated-reference>
 #
 # Fetch one secret from 1Password into the server cache. Server side
 # only, parent process only: cache writes in a background child are lost
@@ -9,9 +9,9 @@ emulate -L zsh
 # in the dynamic scope. The cache has one representation: canonical,
 # single-line base64. Shape remains a request concern; dls_decode turns a cache
 # entry into a value or a file only when that request is admitted. The
-# reference must already be normalized by `dls_ref`. Does NOT sign out of op;
-# the caller owns the session so that a batch of fetches can ride one biometric
-# authorization. Sets REPLY to an error message on failure.
+# reference must already be validated by `dls_ref`. Does NOT sign out of op;
+# the caller owns the account sessions so that it can close every account the
+# batch contacted. Sets REPLY to an error message on failure.
 #
 # SAFETY Raw bytes transit the pipe from `op read` to base64 and do not enter a
 # Zsh scalar. `pocket` captures the encoded output into server memory. No temp

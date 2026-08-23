@@ -6,12 +6,11 @@ zshctl[man_title]='DLS Manuals'
 # ~/.config/dls/config.zsh, for example:
 #
 #     dls[socket]=$HOME/elsewhere/dls.socket
-#     dls_secrets[gh:token]=Private/github/token
-#     dls_files[gcloud:GOOGLE_APPLICATION_CREDENTIALS]=Private/gcloud/key
+#     dls_secrets[gh:token]=Personal/Private/github/token
+#     dls_files[gcloud:GOOGLE_APPLICATION_CREDENTIALS]=Work/Private/gcloud/key
 #
-# DLS spells a reference `vault/item/field`. A leading `op://` is accepted when
-# it arrives from 1Password's copy-reference interface, but it is not part of
-# the DLS language.
+# DLS spells a reference `account/vault/item/field`. The account is passed to
+# `op --account`; the remaining path becomes the 1Password reference.
 #
 typeset -gA dls=() dls_secrets=() dls_files=()
 

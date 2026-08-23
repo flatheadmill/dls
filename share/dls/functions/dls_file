@@ -1,15 +1,14 @@
 emulate -L zsh
 
-# usage: dls_file <normalized-reference>
+# usage: dls_file <validated-reference>
 #
 # Materialize one cached reference beneath this request's directory and return
-# its absolute path in REPLY. dls_ref has already established that the portion
-# after the internal op:// prefix is a relative, traversal-free DLS reference,
-# so preserving it here preserves the operator's vault/item/field spelling
-# without giving the dls_files map key any say in the filename.
+# its absolute path in REPLY. dls_ref has already established that the complete
+# account/vault/item/field reference is relative and traversal-free, so the
+# account participates in the path without giving the dls_files map key any say
+# in the filename.
 
 typeset _dls_reference=${1:-}
-typeset _dls_relative=${_dls_reference#op://}
 typeset _dls_path _dls_parent
 
 [[ -v _dls_request && -d $_dls_request ]] ||
@@ -19,12 +18,11 @@ typeset _dls_path _dls_parent
 dls_ref $_dls_reference ||
     abend 'fatal: dls_file called with an invalid reference %s' \
         $_dls_reference
-[[ $REPLY = $_dls_reference && $_dls_reference = op://* &&
-   -n $_dls_relative ]] ||
-    abend 'fatal: dls_file called with an unnormalized reference %s' \
+[[ $REPLY = $_dls_reference ]] ||
+    abend 'fatal: dls_ref changed a validated reference %s' \
         $_dls_reference
 
-_dls_path=$_dls_request/$_dls_relative
+_dls_path=$_dls_request/$_dls_reference
 _dls_parent=${_dls_path:h}
 
 # The same reference may populate more than one key in the request map. Its

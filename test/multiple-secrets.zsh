@@ -44,6 +44,12 @@ function assert_absent {
 mkdir -p $home/bin
 cat > $home/bin/op <<'EOF'
 #!/usr/bin/env zsh
+typeset account=''
+integer i
+for (( i = 1; i <= $#; i++ )); do
+    [[ $argv[$i] = --account ]] || continue
+    account=$argv[$(( i + 1 ))]
+done
 print -r -- "$*" >> ${OP_FAKE_LOG:?}
 case $1 in
 (read)
@@ -52,10 +58,10 @@ case $1 in
     # request must not wait for this child, because the `op read` boundary must
     # not hand it DLS's listener, connection, or pocket pipes.
     ( exec sleep 4 ) </dev/null >/dev/null 2>&1 &!
-    case ${@[-1]} in
-    (op://Vault/item/alpha) print -rn -- 'CANARY' ;;
-    (op://Vault/item/beta)  print -rn -- 'CANARYTAIL9999' ;;
-    (op://Vault/item/gamma) print -rn -- 'ZEBRA-VALUE-9876' ;;
+    case $account:${@[-1]} in
+    (First:op://Vault/item/shared)  print -rn -- 'CANARY' ;;
+    (Second:op://Vault/item/beta)   print -rn -- 'CANARYTAIL9999' ;;
+    (Second:op://Vault/item/shared) print -rn -- 'ZEBRA-VALUE-9876' ;;
     (*) print -r -u 2 -- "[ERROR] fake op: unknown ref ${@[-1]}"; exit 1 ;;
     esac
     ;;
@@ -83,19 +89,16 @@ function :execute:test-secret {
     dls_execute "$@"
 }
 
-# Both reference forms, deliberately. The bare form is what the documentation
-# tells an operator to write, so it is the one that must survive the whole path
-# from configuration through normalization to the argument `op read` receives;
-# the prefixed form is what 1Password's own interface hands you when you copy a
-# reference, so it has to keep working too.
-: ${dls_secrets[test-secret:alpha]:=Vault/item/alpha}
-: ${dls_secrets[test-secret:beta]:=op://Vault/item/beta}
+# One request crosses two accounts. The first component selects the account;
+# the remaining path is the reference `op read` receives.
+: ${dls_secrets[test-secret:alpha]:=First/Vault/item/shared}
+: ${dls_secrets[test-secret:beta]:=Second/Vault/item/beta}
 
 function :dls:test-secret {
     if [[ ${1:-} = probe-cache ]]; then
         typeset _probe_path=$2
         if [[ -v _dls_cache ]]; then
-            print -rn -- "${_dls_cache[op://Vault/item/gamma]:-cache unavailable}" > $_probe_path
+            print -rn -- "${_dls_cache[Second/Vault/item/shared]:-cache unavailable}" > $_probe_path
         else
             print -rn -- 'cache unavailable' > $_probe_path
         fi
@@ -134,7 +137,7 @@ function :execute:test-other {
     dls_execute "$@"
 }
 
-: ${dls_secrets[test-other:gamma]:=Vault/item/gamma}
+: ${dls_secrets[test-other:gamma]:=Second/Vault/item/shared}
 
 function :dls:test-other {
     print -r -- "gamma-len: ${#secret[gamma]}"
@@ -165,7 +168,8 @@ integer server=0
     typeset out log
     float started elapsed
 
-    # Cold: two reads, one signout, populated map, masked raw output.
+    # Cold: two reads across two accounts, one signout per account, populated
+    # map, masked raw output.
     started=$EPOCHREALTIME
     out=$(dls test-secret 2> $home/err)
     elapsed=$(( EPOCHREALTIME - started ))
@@ -186,7 +190,13 @@ integer server=0
     log="$(<$OP_FAKE_LOG)"
     integer reads=${#${(M)${(f)log}:#read*}} signouts=${#${(M)${(f)log}:#signout*}}
     assert 'cold call reads twice' 2 $reads
-    assert 'cold call signs out once' 1 $signouts
+    assert 'cold call signs out each account' 2 $signouts
+    assert 'first read selects its account' \
+        'read --account First --no-newline -- op://Vault/item/shared' "$log"
+    assert 'second read selects its account' \
+        'read --account Second --no-newline -- op://Vault/item/beta' "$log"
+    assert 'first account is signed out' 'signout --account First' "$log"
+    assert 'second account is signed out' 'signout --account Second' "$log"
 
     # Warm: no additional op contact, same populated map.
     out=$(dls test-secret 2> $home/err)
@@ -195,7 +205,7 @@ integer server=0
     signouts=${#${(M)${(f)log}:#signout*}}
     assert 'warm call still populates' 'alpha-rev: YRANAC' "$out"
     assert 'warm call adds no reads' 2 $reads
-    assert 'warm call adds no signout' 1 $signouts
+    assert 'warm call adds no signout' 2 $signouts
 
     out=$(dls test-other 2> $home/err)
     assert 'second command receives its secret' 'gamma-len: 16' "$out"

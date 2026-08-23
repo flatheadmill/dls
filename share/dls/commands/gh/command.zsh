@@ -21,9 +21,6 @@ function :execute:gh {
     dls_execute "$@"
 }
 
-# The op reference for the token. Override it in ~/.config/dls/config.zsh.
-: ${dls_secrets[gh:token]:=Private/github/token}
-
 # SERVER Runs as the forked first stage of the masking pipeline inside a
 # background wrapper: contained, in the client's working directory, with
 # standard input on /dev/null. The framework resolved the non-exported
@@ -33,6 +30,11 @@ function :execute:gh {
 # than the server environment; it never appears on a command line or in a
 # file.
 function :dls:gh {
+    if (( ! ${+secret[token]} )); then
+        print -r -u 2 -- 'dls gh has no configured token'
+        return 78
+    fi
+
     # Find the subcommand after the common repository options. This is best
     # effort argument parsing over a deliberately incomplete refusal list.
     # Masking remains the backstop when a known command such as auth writes the
