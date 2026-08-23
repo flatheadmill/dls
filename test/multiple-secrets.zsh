@@ -47,6 +47,11 @@ cat > $home/bin/op <<'EOF'
 print -r -- "$*" >> ${OP_FAKE_LOG:?}
 case $1 in
 (read)
+    # Model a CLI that starts a conventional daemon: it releases the standard
+    # three descriptors and retains every unrecognized high descriptor. The
+    # request must not wait for this child, because the `op read` boundary must
+    # not hand it DLS's listener, connection, or pocket pipes.
+    ( exec sleep 4 ) </dev/null >/dev/null 2>&1 &!
     case ${@[-1]} in
     (op://Vault/item/alpha) print -rn -- 'CANARY' ;;
     (op://Vault/item/beta)  print -rn -- 'CANARYTAIL9999' ;;
@@ -158,9 +163,18 @@ integer server=0
     [[ -S $DLS_SOCKET ]] || { print -r -- 'FAIL: server never bound'; exit 1 }
 
     typeset out log
+    float started elapsed
 
     # Cold: two reads, one signout, populated map, masked raw output.
+    started=$EPOCHREALTIME
     out=$(dls test-secret 2> $home/err)
+    elapsed=$(( EPOCHREALTIME - started ))
+    if (( elapsed < 2.0 )); then
+        print -r -- 'ok: op daemon does not hold the fetch pipes'
+    else
+        printf 'FAIL: op daemon held the fetch pipes for %.3fs\n' $elapsed
+        (( failures++ ))
+    fi
     assert 'alpha reaches the map' 'alpha-rev: YRANAC' "$out"
     assert 'beta reaches the map' 'beta-len: 14' "$out"
     assert 'raw print is masked' 'raw: <concealed by dls>' "$out"
@@ -206,6 +220,7 @@ integer server=0
         print -r -- '--- op.log ---'
         print -r -- "$(<$OP_FAKE_LOG)"
     fi
+    [[ -d $home/files ]] && chmod 700 $home/files 2>/dev/null
     rm -rf $home
 }
 

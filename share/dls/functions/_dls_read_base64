@@ -4,7 +4,28 @@ emulate -L zsh -o pipefail
 # base64 representation. Raw secret bytes stay in the pipe between op and the
 # encoder; only the encoded form returns to dls_fetch's Zsh scalar.
 
-command op read --no-newline -- "$1" |
+# 1Password CLI may start a persistent `op daemon`. A proper daemon releases
+# the standard three descriptors, but it has no reason to know about the
+# listener, accepted client connection, or pocket's capture pipes that this
+# server carries on higher numbers. If it inherits those descriptors, pocket
+# never sees end of file, the request never reaches its command, and the accept
+# loop cannot service `dls stop`.
+#
+# This subshell is the external-process boundary. Preserve only stdin, stdout,
+# and stderr, which are the interfaces `op read` is meant to have. `/dev/fd`
+# gives us the actual inherited set rather than a guessed ceiling or a list of
+# today's plumbing descriptors. Zsh protects any descriptor it still needs
+# internally; those close failures are intentionally quiet, and Zsh closes its
+# own internal descriptors when it executes the external command.
+(
+    typeset _dls_fd_path
+    integer _dls_fd
+    for _dls_fd_path in /dev/fd/<3->(N); do
+        _dls_fd=${_dls_fd_path:t}
+        { exec {_dls_fd}>&- } 2>/dev/null
+    done
+    command op read --no-newline -- "$1"
+) |
     command base64 |
     command tr -d '\n'
 typeset -a _dls_status=( $pipestatus )
