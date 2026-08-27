@@ -1,0 +1,28 @@
+emulate -L zsh
+
+# usage: dls_ref <reference>
+#
+# DLS spells a reference account/vault/item/field. The account component is an
+# op account selector; the remaining path becomes op://vault/item/field at the
+# 1Password boundary. The field may itself contain a section,
+# account/vault/item/section/field. Returns non-zero and clears REPLY when the
+# reference is invalid.
+
+
+typeset _dls_reference=${1:-}
+# Four segments is deliberate, and it already covers the five-segment section
+# form: the trailing ?* is greedy and swallows section/field whole. Each ?*
+# also demands at least one character, so empty components are rejected.
+if [[ $_dls_reference != ?*/?*/?*/?* ]]; then
+    REPLY=''
+    return 1
+fi
+# The complete reference is also the path a file preserves beneath its request
+# directory. Dot and dot-dot components would leave or change that spelling.
+if [[ $_dls_reference = /* || $_dls_reference = */ ||
+      $_dls_reference = *//* || /$_dls_reference/ = */./* ||
+      /$_dls_reference/ = */../* ]]; then
+    REPLY=''
+    return 1
+fi
+REPLY=$_dls_reference

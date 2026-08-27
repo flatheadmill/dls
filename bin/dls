@@ -1,0 +1,67 @@
+#!/usr/bin/env zshctl
+
+zshctl[man_title]='DLS Manuals'
+
+# Configuration shared by client and server. Override in
+# ~/.config/dls/config.zsh, for example:
+#
+#     dls[socket]=$HOME/elsewhere/dls.socket
+#     dls_secrets[project-list:token]=Personal/Example/service/token
+#     dls_files[project-apply:credentials]=Work/Example/service/key
+#
+# DLS spells a reference `account/vault/item/field`. The account is passed to
+# `op --account`; the remaining path becomes the 1Password reference.
+#
+typeset -gA dls=() dls_secrets=() dls_files=()
+
+[[ -f ~/.config/dls/config.zsh ]] && source ~/.config/dls/config.zsh
+
+# Resolve the domain socket path into REPLY. Precedence: the DLS_SOCKET
+# environment variable, then dls[socket] from configuration, then a
+# default under the XDG runtime or state directory.
+function dls_socket {
+    REPLY=${DLS_SOCKET:-${dls[socket]:-${XDG_RUNTIME_DIR:-$HOME/.local/state/dls}/dls.socket}}
+}
+
+function :help {
+    heredoc -v help <<'    EOF'
+        # desc
+        broker secrets to sandboxed agents over a domain socket
+        # opt help
+        Display help for `dls`.
+        # man
+        ## DESCRIPTION
+        `dls` brokers secrets to processes that are not allowed to read them.
+
+        A `dls` server runs outside the sandbox holding secrets in memory,
+        fetched from 1Password with `op read` and cached. Clients connect over a
+        Unix domain socket and invoke commands; the server runs the command
+        with its configured secrets in a non-exported shell map and replays the
+        output. Command code explicitly places selected values or file paths in
+        the environment of the external command that needs them. Secret content
+        never crosses the socket or appears on a command line.
+
+        Each `dls` command is a `zshctl` extension command. The server loads
+        all registered command and helper code at startup and never reloads;
+        activating new or edited code requires a server restart, which is the
+        human approval gate.
+        ## OPTIONS
+        > options
+        ## COMMANDS
+        You can learn more about each command with the `--help` option.
+        > commands
+    EOF
+}
+
+function :args {
+    eval "$(args -UC -bx h,help -- "$@")"
+}
+
+function :execute {
+    delegate "$@"
+}
+
+function :complete {
+}
+
+# vim: ft=zsh:

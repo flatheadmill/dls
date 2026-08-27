@@ -1,0 +1,53 @@
+emulate -L zsh -o pipefail -o no_multibyte
+
+# usage: dls_decode value <validated-reference>
+#        dls_decode file <validated-reference> <path>
+#
+# This is the only content exit from the server cache. The cache holds one
+# representation, canonical base64, and every delivery decodes it. Value
+# delivery returns the raw bytes in REPLY. File delivery sends the raw bytes
+# directly from the decoder to the named request file, without placing them in
+# a Zsh scalar.
+
+typeset _dls_shape=${1:-} _dls_reference=${2:-} _dls_path=${3:-}
+typeset _dls_encoded _dls_value
+typeset -a _dls_status
+
+case $_dls_shape in
+(value)
+    (( $# == 2 )) || abend 'fatal: invalid value delivery for %s' $_dls_reference
+    ;;
+(file)
+    (( $# == 3 && ${#_dls_path} )) ||
+        abend 'fatal: invalid file delivery for %s' $_dls_reference
+    ;;
+(*)
+    abend 'fatal: invalid delivery shape %s for %s' $_dls_shape $_dls_reference
+    ;;
+esac
+
+[[ -v _dls_cache ]] ||
+    abend 'fatal: dls_decode called without the server cache'
+(( ${+_dls_cache[$_dls_reference]} )) ||
+    abend 'fatal: dls_decode called for uncached reference %s' $_dls_reference
+
+_dls_encoded=${_dls_cache[$_dls_reference]}
+
+case $_dls_shape in
+(value)
+    builtin print -rn -- "$_dls_encoded" |
+        command base64 -d |
+        slurp _dls_value
+    _dls_status=( $pipestatus )
+    (( _dls_status[1] == 0 && _dls_status[2] == 0 && _dls_status[3] == 0 )) ||
+        abend 'fatal: unable to decode cached value %s' $_dls_reference
+    REPLY=$_dls_value
+    ;;
+(file)
+    builtin print -rn -- "$_dls_encoded" |
+        command base64 -d > "$_dls_path"
+    _dls_status=( $pipestatus )
+    (( _dls_status[1] == 0 && _dls_status[2] == 0 )) ||
+        abend 'fatal: unable to decode cached file %s' $_dls_reference
+    ;;
+esac

@@ -1,0 +1,23 @@
+emulate -L zsh -o pipefail
+
+# Read one account-qualified DLS reference and emit a canonical, single-line
+# base64 representation. The first component selects the account and the
+# remaining path becomes the 1Password reference. Raw secret bytes stay in the
+# pipe between op and the encoder; only the encoded form returns to dls_fetch's
+# Zsh scalar.
+
+typeset _dls_reference=${1:-}
+typeset _dls_account=${_dls_reference%%/*}
+typeset _dls_op_reference=op://${_dls_reference#*/}
+
+_dls_op read --account $_dls_account --no-newline -- $_dls_op_reference |
+    command base64 |
+    command tr -d '\n'
+typeset -a _dls_status=( $pipestatus )
+
+# Distinguish a failed read from a failed representation. The caller reports
+# an op failure to the request, but an encoder failure breaks the cache's one
+# representation and is fatal to the server.
+(( _dls_status[2] == 0 && _dls_status[3] == 0 )) || return 70
+(( _dls_status[1] == 0 )) || return 1
+return 0

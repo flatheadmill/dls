@@ -1,0 +1,26 @@
+emulate -L zsh
+
+# usage: _dls_command_name
+#
+# Recover the command name from the zshctl :execute:<name> frame that
+# called a dls entry point. This follows the house funcstack walk used by
+# zshctl itself instead of assuming a fixed stack depth.
+#
+# Deliberately unlike usage, this does not accept bare :execute or :args
+# frames because they carry no command name. It stops on :args:* only to
+# refuse that frame loudly instead of silently recovering an outer
+# :execute:* name.
+
+integer top=2
+while [[ $funcstack[$top] != (:execute:*|:args:*) ]]; do
+    ((top++))
+    (( top <= ${#funcstack} )) ||
+        abend 'fatal: dls entry point must be called from a :execute function'
+done
+
+[[ $funcstack[$top] = :execute:* ]] ||
+    abend 'fatal: dls entry point must be called from a :execute function'
+
+REPLY=${funcstack[$top]#:execute:}
+[[ -n $REPLY ]] ||
+    abend 'fatal: dls entry point cannot recover command name'

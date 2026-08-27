@@ -1,0 +1,46 @@
+emulate -L zsh
+
+# usage: dls_file <validated-reference>
+#
+# Materialize one cached reference beneath this request's directory and return
+# its absolute path in REPLY. dls_ref has already established that the complete
+# account/vault/item/field reference is relative and traversal-free, so the
+# account participates in the path without giving the dls_files map key any say
+# in the filename.
+
+typeset _dls_reference=${1:-}
+typeset _dls_path _dls_parent
+
+[[ -v _dls_request && -d $_dls_request ]] ||
+    abend 'fatal: dls_file called without a request directory'
+[[ -v _dls_materialized ]] ||
+    abend 'fatal: dls_file called without the request file map'
+dls_ref $_dls_reference ||
+    abend 'fatal: dls_file called with an invalid reference %s' \
+        $_dls_reference
+[[ $REPLY = $_dls_reference ]] ||
+    abend 'fatal: dls_ref changed a validated reference %s' \
+        $_dls_reference
+
+_dls_path=$_dls_request/$_dls_reference
+_dls_parent=${_dls_path:h}
+
+# The same reference may populate more than one key in the request map. Its
+# derived path is the same, so materialize it once and hand back that one path.
+if (( ${+_dls_materialized[$_dls_reference]} )); then
+    REPLY=$_dls_materialized[$_dls_reference]
+    return 0
+fi
+
+[[ ! -e $_dls_path ]] ||
+    abend 'fatal: file reference collides with another path: %s' \
+        $_dls_reference
+command mkdir -p $_dls_parent ||
+    abend 'fatal: unable to create directory for file reference %s' \
+        $_dls_reference
+dls_decode file $_dls_reference $_dls_path
+command chmod 600 $_dls_path ||
+    abend 'fatal: unable to secure file reference %s' $_dls_reference
+
+_dls_materialized[$_dls_reference]=$_dls_path
+REPLY=$_dls_path

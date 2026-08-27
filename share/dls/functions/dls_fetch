@@ -1,0 +1,56 @@
+emulate -L zsh
+
+# usage: dls_fetch <validated-reference>
+#
+# Fetch one secret from 1Password into the server cache. Server side
+# only, parent process only: cache writes in a background child are lost
+# when it exits, so the serve loop resolves secrets before it backgrounds
+# a command. Expects the _dls_cache associative array declared by `dls serve`
+# in the dynamic scope. The cache has one representation: canonical,
+# single-line base64. Shape remains a request concern; dls_decode turns a cache
+# entry into a value or a file only when that request is admitted. The
+# reference must already be validated by `dls_ref`. Does NOT sign out of op;
+# the caller owns the account sessions so that it can close every account the
+# batch contacted. Sets REPLY to an error message on failure.
+#
+# SAFETY Raw bytes transit the pipe from `op read` to base64 and do not enter a
+# Zsh scalar. `pocket` captures the encoded output into server memory. No temp
+# files, secret argv, environment, or here-strings — a zsh here-string is a
+# temp file.
+
+typeset _dls_reference=${1:-} _dls_out _dls_err
+integer _dls_status
+
+[[ -v _dls_cache ]] || {
+    REPLY='dls_fetch: no cache in scope: dls_fetch is server side only'
+    return 69
+}
+
+pocket _dls_out _dls_err _dls_read_base64 $_dls_reference
+_dls_status=$?
+if (( _dls_status == 70 )); then
+    abend 'fatal: unable to encode secret reference %s' $_dls_reference
+fi
+if (( _dls_status )); then
+    case $_dls_err in
+    (*'not currently signed in'*)
+        REPLY="dls: op not signed in: authorization refused or timed out reading $_dls_reference"
+        ;;
+    (*"isn't a vault"*)
+        REPLY="dls: no such vault: $_dls_reference"
+        ;;
+    (*"isn't an item"*)
+        REPLY="dls: no such item: $_dls_reference"
+        ;;
+    (*"isn't a field"*)
+        REPLY="dls: no such field: $_dls_reference"
+        ;;
+    (*)
+        REPLY="dls: op read failed: $_dls_reference: ${${(f)_dls_err}[1]:-unknown error}"
+        ;;
+    esac
+    return 1
+fi
+
+_dls_cache[$_dls_reference]=$_dls_out
+return 0
