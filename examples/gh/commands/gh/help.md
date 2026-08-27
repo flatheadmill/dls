@@ -1,4 +1,4 @@
-# desc -- run gh with the github token brokered
+# desc -- run gh with a brokered GitHub token
 Run GitHub's `gh` CLI on the dls server with its brokered token.
 # arg -- <gh-arguments>...
 # opt help

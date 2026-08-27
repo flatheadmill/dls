@@ -52,7 +52,7 @@ function _dls_load_sources {
         # This is the line that makes the no-reload invariant above real.
         # Having sourced the command file once, we overwrite its zshctl entry
         # (the source path) with ':', a no-op, so zshctl's delegate never
-        # lazily re-sources it on a later call. Drop this and every `dls gh`
+        # lazily re-sources it on a later call. Drop this and every DLS command
         # re-reads the file from disk, and agent-edited command code goes live
         # without a restart — the approval gate, gone.
         zshctl[$key]=':'

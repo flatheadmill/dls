@@ -169,7 +169,7 @@ Review the command source and configuration, then start the server in a trusted 
 ```console
 $ dls serve
 dls: serving on /home/example/.local/state/dls/dls.socket
-dls: commands: gh, project-list
+dls: commands: project-list
 ```
 
 The default socket is `$XDG_RUNTIME_DIR/dls.socket` when that variable is set, otherwise `~/.local/state/dls/dls.socket`. `DLS_SOCKET` overrides it for one invocation, and `dls[socket]` in the configuration provides a persistent override. The server and client must resolve the same path.
@@ -216,7 +216,9 @@ The output filter is exact and line-oriented. It does not conceal transformed va
 
 Request files belong to the foreground operation. A detached process that has released DLS's output streams may outlive the request, but its request files do not. Long-running services should remain attached and run in the foreground.
 
-The bundled `gh` command is a broad compatibility example, not the model for a new operation. It isolates GitHub CLI aliases and extensions and refuses the `auth`, `alias`, and `extension` families, but it still passes a token to a large program with its own subprocess surface. Prefer a command that names and validates one useful action.
+## Example extension
+
+The optional [`gh` example](examples/gh) is not installed with DLS. Most users should use GitHub CLI's own authentication and run `gh` directly. The example remains in the repository to show the additional care required when a broad, extensible CLI receives a brokered token; new operations should prefer the narrow `project-list` shape above.
 
 ## Tests
 

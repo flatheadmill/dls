@@ -2,7 +2,7 @@ emulate -L zsh
 
 # usage: _dls_call <kind> <name> <words...>
 #
-#     _dls_call execute gh pr list
+#     _dls_call execute project-list
 #     _dls_call control status
 #
 # Send one request to the dls server and stream its response. The client

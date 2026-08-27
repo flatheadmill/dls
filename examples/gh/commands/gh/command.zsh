@@ -1,4 +1,4 @@
-# The gh command. The client half forwards argv verbatim; the server half
+# The optional gh example. The client half forwards argv verbatim; the server half
 # gives GitHub's CLI only its configured token.
 #
 # GitHub CLI discovers user aliases in its configuration root and extensions

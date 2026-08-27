@@ -52,6 +52,12 @@ cat > $home/.config/dls/config.zsh <<'EOF'
 dls_secrets[gh:token]=Test/Private/github/token
 EOF
 
+# gh is an optional example, not an installed DLS command. Link it explicitly
+# in the disposable home so this suite can still exercise the example's CLI
+# boundary.
+mkdir -p $home/.local/share/dls/extensions
+ln -s $root/examples/gh $home/.local/share/dls/extensions/gh
+
 # The boundary fixtures below are real gh registrations, so this suite needs a
 # real gh. Refuse rather than skip: a run that quietly omits the alias and
 # extension assertions would report PASS while proving nothing about the one
