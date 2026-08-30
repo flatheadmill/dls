@@ -5,9 +5,11 @@
 # The socket is the control plane. A request is one line of ${(q)}
 # quoted words:
 #
-#     <kind> <name> <cwd> <out-fifo> <err-fifo> <args...>
+#     execute       <name> <cwd> <out-fifo> <err-fifo> <args...>
+#     execute-stdin <name> <cwd> <out-fifo> <err-fifo> <in-fifo> <args...>
+#     control       <name> <cwd> <out-fifo> <err-fifo> <args...>
 #
-# where kind is `execute` or `control`. The response is the exit status,
+# where kind is `execute`, `execute-stdin`, or `control`. The response is the exit status,
 # written to the connection as `exit <code>` when the command finishes.
 # The background wrapper and maskers retain the connection fd, but the
 # command tree does not. The client's end reaches end of file when that
@@ -19,8 +21,10 @@
 #
 # Output never crosses the socket. The command's standard out and standard
 # error stream through the fifos, masked line by line against the decoded
-# values admitted to that request. The server touches both fifos exactly once
-# per request, error paths included, so client readers always terminate.
+# values admitted to that request. An execute-stdin request adds a fifo flowing
+# from the client to command fd 0; ordinary requests use /dev/null. The server
+# touches both output fifos exactly once per request, error paths included, so
+# client readers always terminate.
 
 zmodload zsh/net/socket
 zmodload zsh/datetime
@@ -242,11 +246,15 @@ function _dls_reply {
 # included.
 function _dls_run_execute {
     integer conn=$1
-    typeset name=$2 cwd=$3 out=$4 err=$5
-    shift 5
+    typeset name=$2 cwd=$3 out=$4 err=$5 in=$6
+    shift 6
     (
         setopt no_multios
-        exec {_dls_listen}>&- < /dev/null
+        if [[ $in = - ]]; then
+            exec {_dls_listen}>&- < /dev/null
+        else
+            exec {_dls_listen}>&- < $in
+        fi
         # The connection arrives on a low fd that the pipeline's fd 3
         # swap can collide with; dup it to a shell allocated fd, ten or
         # above, where no literal redirection can reach it.
@@ -420,8 +428,13 @@ function _dls_resolve_secrets {
 
 function _dls_handle_execute {
     integer conn=$1
-    typeset name=$2 cwd=$3 out=$4 err=$5
-    shift 5
+    typeset name=$2 cwd=$3 out=$4 err=$5 in=$6
+    shift 6
+    if [[ $in != - && ! -p $in ]]; then
+        _dls_reply $conn "$out" "$err" 64 '' \
+            $'dls: protocol error: invalid input fifo\n'
+        return
+    fi
     # ${name} is braced wherever a colon follows it: a bare $name invites
     # zsh's history-style modifiers — $name:s silently mangles the key.
     if (( ! ${+functions[:dls:${name}]} )); then
@@ -453,7 +466,7 @@ function _dls_handle_execute {
             "${REPLY:-dls: unable to resolve secrets}"$'\n'
         return
     fi
-    _dls_run_execute $conn "$name" "$cwd" "$out" "$err" "$@"
+    _dls_run_execute $conn "$name" "$cwd" "$out" "$err" "$in" "$@"
 }
 
 function _dls_control_fetch {
@@ -597,7 +610,17 @@ function _dls_handle {
     typeset -a args=( "${(@)request[6,-1]}" )
     case $kind in
     (execute)
-        _dls_handle_execute $conn "$name" "$cwd" "$out" "$err" "${(@)args}"
+        _dls_handle_execute $conn "$name" "$cwd" "$out" "$err" - "${(@)args}"
+        ;;
+    (execute-stdin)
+        if (( ${#request} < 6 )); then
+            _dls_reply $conn "$out" "$err" 64 '' \
+                $'dls: protocol error: missing input fifo\n'
+            return
+        fi
+        typeset in=$request[6]
+        args=( "${(@)request[7,-1]}" )
+        _dls_handle_execute $conn "$name" "$cwd" "$out" "$err" "$in" "${(@)args}"
         ;;
     (control)
         _dls_handle_control $conn "$name" "$out" "$err" "${(@)args}"

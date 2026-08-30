@@ -3,19 +3,27 @@ emulate -L zsh
 # usage: _dls_call <kind> <name> <words...>
 #
 #     _dls_call execute project-list
+#     _dls_call execute-stdin terraform apply
 #     _dls_call control status
 #
 # Send one request to the dls server and stream its response. The client
-# creates a pair of fifos and sends their paths with the request; the
+# creates output and error fifos and sends their paths with the request; the
 # server runs the command in the background with standard out and standard
 # error connected to the fifos and is immediately ready for the next
 # client. Output streams through the fifos in real time, so long-running
 # commands neither block the server nor buffer in memory.
 #
+# An execute-stdin request adds a third fifo after the two output paths. A
+# copier feeds the client's standard input into it until the input ends or the
+# command completes. Plain execute and control requests keep their existing
+# wire shape, so a new client still speaks their old protocol to an old server.
+#
 # The request is a single line of ${(q)} quoted words — ${(q)} renders
 # embedded newlines as $'\n' so the request always fits one line:
 #
-#     <kind> <name> <cwd> <out-fifo> <err-fifo> <args...>
+#     execute       <name> <cwd> <out-fifo> <err-fifo> <args...>
+#     execute-stdin <name> <cwd> <out-fifo> <err-fifo> <in-fifo> <args...>
+#     control       <name> <cwd> <out-fifo> <err-fifo> <args...>
 #
 # Compatibility: the wire kind is part of the client/server protocol. A
 # new client talking to an old server, or the reverse, will report an
@@ -30,9 +38,10 @@ emulate -L zsh
 # they may be blocked on opens that will never come — and report a protocol
 # error instead of hanging.
 #
-# If we are killed mid-stream our fifo readers die, the command takes
-# SIGPIPE on its next write, and everything unwinds by pipe semantics;
-# nobody cleans up because nobody has to.
+# If we are killed mid-stream the process-group signal stops our fifo readers
+# and input copier, the command takes SIGPIPE on its next write, and everything
+# unwinds by pipe semantics. A signal exit may leave the private fifo directory
+# behind; it contains no secret value and no process remains to hold it.
 
 zmodload zsh/net/socket
 
@@ -47,10 +56,18 @@ typeset _dls_dir
 _dls_dir=$(mktemp -d ${TMPDIR:-/tmp}/dls.XXXXXX) ||
     abend -c 74 'fatal: unable to create fifo directory'
 
-integer _dls_code=-1 _dls_out_job=0 _dls_err_job=0
+integer _dls_code=-1 _dls_in_fd=-1 _dls_in_job=0
+integer _dls_out_job=0 _dls_err_job=0
 {
     mkfifo -m 600 $_dls_dir/out $_dls_dir/err ||
         abend -c 74 'fatal: unable to create fifos in %s' $_dls_dir
+
+    typeset _dls_in=''
+    if [[ $_dls_kind = execute-stdin ]]; then
+        _dls_in=$_dls_dir/in
+        mkfifo -m 600 $_dls_in ||
+            abend -c 74 'fatal: unable to create input fifo in %s' $_dls_dir
+    fi
 
     zsocket $_dls_socket 2>/dev/null ||
         abend -c 69 'fatal: no dls server: start one with `dls serve` (socket: %s)' $_dls_socket
@@ -59,8 +76,24 @@ integer _dls_code=-1 _dls_out_job=0 _dls_err_job=0
     typeset -a _dls_request=(
         $_dls_kind $_dls_name $PWD $_dls_dir/out $_dls_dir/err "$@"
     )
+    if [[ -n $_dls_in ]]; then
+        _dls_request=(
+            $_dls_kind $_dls_name $PWD $_dls_dir/out $_dls_dir/err
+            $_dls_in "$@"
+        )
+    fi
     print -r -u $_dls_fd -- "${(j: :)${(@q)_dls_request}}"
 
+    if [[ -n $_dls_in ]]; then
+        # With job control off, Zsh gives an asynchronous command /dev/null as
+        # standard input. Preserve the client's fd 0 before backgrounding so a
+        # real terminal, not merely a pipe, reaches the copier.
+        exec {_dls_in_fd}<&0
+        cat <&$_dls_in_fd > $_dls_in &
+        _dls_in_job=$!
+        exec {_dls_in_fd}<&-
+        _dls_in_fd=-1
+    fi
     cat $_dls_dir/out &
     _dls_out_job=$!
     cat $_dls_dir/err >&2 &
@@ -79,12 +112,26 @@ integer _dls_code=-1 _dls_out_job=0 _dls_err_job=0
     done
 
     if (( _dls_code >= 0 )); then
+        # A terminal does not reach EOF when the command exits. Completion
+        # therefore owns the input copier's far end: stop it before waiting on
+        # the output readers, whether it is blocked opening the fifo or waiting
+        # for another byte from the client.
+        if (( _dls_in_job )); then
+            kill $_dls_in_job 2>/dev/null
+            wait $_dls_in_job 2>/dev/null
+            _dls_in_job=0
+        fi
         # Normal completion: end of file on the socket means the maskers
         # have exited and closed the fifos, so the readers are done.
         wait $_dls_out_job $_dls_err_job
         _dls_out_job=0 _dls_err_job=0
     fi
 } always {
+    (( _dls_in_fd >= 0 )) && exec {_dls_in_fd}<&-
+    if (( _dls_in_job )); then
+        kill $_dls_in_job 2>/dev/null
+        wait $_dls_in_job 2>/dev/null
+    fi
     (( _dls_out_job )) && kill $_dls_out_job 2>/dev/null
     (( _dls_err_job )) && kill $_dls_err_job 2>/dev/null
     rm -rf $_dls_dir

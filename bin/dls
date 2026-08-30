@@ -27,6 +27,9 @@ function :help {
     heredoc -v help <<'    EOF'
         # desc
         broker secrets to sandboxed agents over a domain socket
+        # opt stdin
+        Forward the client's standard input to the command as a byte stream.
+        DLS does not provide a terminal.
         # opt help
         Display help for `dls`.
         # man
@@ -54,10 +57,11 @@ function :help {
 }
 
 function :args {
-    eval "$(args -UC -bx h,help -- "$@")"
+    eval "$(args -UC -b ,stdin -bx h,help -- "$@")"
 }
 
 function :execute {
+    integer _dls_forward_stdin=$o_stdin
     delegate "$@"
 }
 

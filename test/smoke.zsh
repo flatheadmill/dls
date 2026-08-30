@@ -11,6 +11,7 @@
 
 emulate -L zsh
 zmodload zsh/datetime
+zmodload zsh/zpty
 
 typeset root=${ZSH_ARGZERO:A:h:h}
 typeset zshctl=${ZSHCTL:-$(command -v zshctl)}
@@ -124,7 +125,9 @@ function :help:test-echo {
 }
 
 function :args:test-echo {
-    eval "$(args -- -- "$@")"
+    # Deliberately define the same public option name at command scope. The
+    # root transport choice must survive this local o_stdin shadow.
+    eval "$(args -b ,stdin -- "$@")"
 }
 
 function :execute:test-echo {
@@ -135,6 +138,19 @@ function :dls:test-echo {
     if [[ ${1:-} = refuse ]]; then
         print -r -u 2 -- 'dls: test-echo refuses this request'
         return 77
+    fi
+    if [[ ${1:-} = stdin-one ]]; then
+        typeset line
+        if IFS= read -r line; then
+            print -r -- "stdin: $line"
+        else
+            print -r -- 'stdin: eof'
+        fi
+        return 0
+    fi
+    if [[ ${1:-} = stdin-copy ]]; then
+        cat
+        return $?
     fi
     if [[ ${1:-} = detach ]]; then
         # A detached child that has released the standard three descriptors
@@ -248,7 +264,7 @@ wait $unbindable_server 2>/dev/null
 typeset unbindable_out=$(cat $home/unbindable.log 2>/dev/null)
 assert 'unresolvable helper is named' 'test_helper' "$unbindable_out"
 
-integer server=0
+integer server=0 stdin_producer=0
 {
     dls serve > $home/serve.log 2>&1 &
     server=$!
@@ -272,6 +288,89 @@ integer server=0
     assert 'status reports the socket' $DLS_SOCKET "$out"
     assert 'status reports the commands' 'commands: gh, test-echo' "$out"
     assert 'status reports an empty cache' 'cached: (none)' "$out"
+
+    out=$(dls --stdin status 2> $home/err)
+    code=$?
+    err=$(<$home/err)
+    assert_code 'stdin flag rejects a control' 64 $code
+    assert 'stdin control refusal explains itself' \
+        '--stdin` requires a DLS command' "$err"
+
+    out=$(print -r -- ignored | dls test-echo stdin-one 2> $home/err)
+    assert_code 'default input command exits zero' 0 $?
+    assert 'default command receives end of file' 'stdin: eof' "$out"
+
+    out=$(print -r -- yes | dls --stdin test-echo stdin-one 2> $home/err)
+    assert_code 'forwarded input command exits zero' 0 $?
+    assert 'forwarded line reaches the command' 'stdin: yes' "$out"
+
+    printf 'first\nsecond' |
+        dls --stdin test-echo stdin-copy > $home/stdin-copy 2> $home/err
+    assert_code 'forwarded byte stream exits zero' 0 $?
+    if printf 'first\nsecond' | cmp -s - $home/stdin-copy; then
+        print -r -- 'ok: forwarded input and its end of file are byte-faithful'
+    else
+        print -r -- 'FAIL: forwarded input changed in transit'
+        (( failures++ ))
+    fi
+
+    # The producer models a terminal that remains open after the command has
+    # consumed the one line it needs. Command completion must stop DLS's input
+    # copier rather than waiting for the producer to close four seconds later.
+    mkfifo $home/client-input
+    { print -r -- yes; sleep 4 } > $home/client-input &
+    stdin_producer=$!
+    float stdin_started=$EPOCHREALTIME stdin_elapsed
+    out=$(dls --stdin test-echo stdin-one \
+        < $home/client-input 2> $home/err)
+    code=$?
+    stdin_elapsed=$(( EPOCHREALTIME - stdin_started ))
+    assert_code 'command with open client input exits zero' 0 $code
+    if (( stdin_elapsed < 2.0 )); then
+        print -r -- 'ok: command completion stops the input copier'
+    else
+        printf 'FAIL: input copier held the client for %.3fs\n' $stdin_elapsed
+        (( failures++ ))
+    fi
+    kill $stdin_producer 2>/dev/null
+    wait $stdin_producer 2>/dev/null
+    stdin_producer=0
+
+    # Put the client in the foreground of a pseudo-terminal. This grounds the
+    # case that a pipe cannot: Zsh otherwise assigns /dev/null to a background
+    # copier when job control is off. A typed line must cross the saved client
+    # descriptor, and the terminal's interrupt character must end the client
+    # without leaving its input copier alive.
+    mkdir $home/client-tmp
+    typeset stdin_command="HOME=${(q)home} TMPDIR=${(q)home}/client-tmp "
+    stdin_command+="DLS_SOCKET=${(q)DLS_SOCKET} ${(q)zshctl} "
+    stdin_command+="${(q)root}/bin/dls --stdin test-echo stdin-copy"
+    zpty -b stdin-client $stdin_command
+    typeset -a stdin_dirs=()
+    for i in {1..30}; do
+        stdin_dirs=( $home/client-tmp/dls.*(N) )
+        (( ${#stdin_dirs} )) && break
+        sleep 0.1
+    done
+    zpty -w stdin-client typed
+    typeset stdin_terminal_out=''
+    for i in {1..30}; do
+        zpty -r -t stdin-client stdin_terminal_out '*typed*' && break
+        sleep 0.1
+    done
+    assert 'terminal input reaches the command' 'typed' "$stdin_terminal_out"
+    zpty -w -n stdin-client $'\x03'
+    for i in {1..30}; do
+        zpty -t stdin-client || break
+        sleep 0.1
+    done
+    if zpty -t stdin-client; then
+        print -r -- 'FAIL: interrupted stdin client did not exit'
+        (( failures++ ))
+    else
+        print -r -- 'ok: interrupted stdin client exits'
+    fi
+    zpty -d stdin-client 2>/dev/null
 
     out=$(dls test-echo hello world 2> $home/err)
     code=$?
@@ -473,6 +572,8 @@ integer server=0
         fi
     done
 } always {
+    zpty -d stdin-client 2>/dev/null
+    (( stdin_producer )) && kill $stdin_producer 2>/dev/null
     if (( failures )); then
         print -r -- '--- serve.log ---'
         print -r -- "$(<$home/serve.log)"
