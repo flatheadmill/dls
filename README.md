@@ -180,7 +180,7 @@ Code already approved at startup is trusted. If its reviewed behavior explicitly
 
 The first cold operation may ask the human to authorize each 1Password account it uses. Subsequent uses of the same reference are served from the in-memory cache. DLS signs out each account contacted by a cold batch so a later fetch is another deliberate authorization.
 
-Commands run with standard input connected to `/dev/null`. Design them to be non-interactive. They run in the client's current working directory when that directory is available to the server.
+Commands receive `/dev/null` as standard input by default. `dls --stdin <command> ...` instead forwards the client's standard input as a byte stream; it does not provide a terminal, so programs that require terminal modes or screen control remain outside the interface. Commands run in the client's current working directory when that directory is available to the server.
 
 ## Operate the server
 

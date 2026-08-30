@@ -1,5 +1,8 @@
 emulate -L zsh
 
+(( ! ${_dls_forward_stdin:-0} )) ||
+    abend -c 64 'fatal: invalid argument: `--stdin` requires a DLS command'
+
 typeset REPLY
 _dls_command_name
 _dls_call control "$REPLY" "$@"

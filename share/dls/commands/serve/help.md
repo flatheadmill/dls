@@ -48,6 +48,11 @@ admitted to that request. Exact masks shorter than four characters are skipped.
 File contents, transformed values, and output written anywhere other than
 stdout or stderr are outside that filter.
 
+Commands receive `/dev/null` as standard input unless the client invokes
+`dls --stdin`. In that form the client's standard input is forwarded as a byte
+stream. It is not a pseudo-terminal: terminal modes, screen control, and window
+size are not brokered.
+
 Stopping the server leaves command process trees already in flight to finish.
 A newly started server cleans the shared files root before listening, so an old
 in-flight command cannot rely on a request-scoped file path surviving an
