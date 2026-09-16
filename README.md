@@ -29,6 +29,8 @@ That is enough. The human decides which reference to configure, which environmen
 
 `dls --help` shows commands installed on disk; `dls status` shows what the running server actually loaded. Starting or restarting the server is the approval step, not agent housekeeping.
 
+Treat that approval as the control, not the agent's perfect recollection of this rule. An agent may mistakenly try to start the server. Decline the unexpected start at the approval boundary; if it was allowed, stop the server and review the loaded command sources before starting it again. The useful response is to restore the boundary, not to replace it with a reprimand.
+
 ## The division of responsibility
 
 The human owns the server, configuration, and approval of command code. The agent names an approved operation and consumes its ordinary output.
