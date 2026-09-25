@@ -1,0 +1,14 @@
+emulate -L zsh -o extendedglob
+
+typeset _dls_path=${dls[snapshot]:-$HOME/.local/state/dls/snapshot.gpg}
+typeset _dls_pin=${(U)dls[recipient]}
+if [[ $_dls_path != /* || $_dls_path = */ ]]; then
+    REPLY='dls[snapshot] must be an absolute file path'
+    return 1
+fi
+if [[ $_dls_pin != [[:xdigit:]]## ]] ||
+        (( ${#_dls_pin} != 40 && ${#_dls_pin} != 64 )); then
+    REPLY='dls[recipient] must be the full encryption key fingerprint'
+    return 1
+fi
+reply=( "$_dls_path" "$_dls_pin" )

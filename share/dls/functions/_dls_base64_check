@@ -1,0 +1,12 @@
+emulate -L zsh -o pipefail
+
+# Round-trip in pipes to reject noncanonical padding as well as invalid bytes.
+# Only the encoded representation enters a scalar, even for binary file values.
+typeset _dls_roundtrip
+_dls_roundtrip=$(
+    builtin print -rn -- "$1" |
+        command base64 -d 2>/dev/null |
+        command base64 |
+        command tr -d '\n'
+) || return 1
+[[ $_dls_roundtrip = "$1" ]]

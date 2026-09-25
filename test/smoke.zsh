@@ -2,7 +2,7 @@
 
 # Smoke test for the dls wire protocol and control plane. Exercises
 # everything that does not require a 1Password fingerprint: the streams,
-# exit code propagation, command refusal, invalid references, cache clear,
+# exit code propagation, command refusal, removed controls,
 # status and stop. The op read path and the signout re-prompt must be
 # verified by a human with a finger.
 #
@@ -472,21 +472,13 @@ integer server=0 stdin_producer=0
         (( failures++ ))
     fi
 
-    out=$(dls fetch not-a-reference 2> $home/err)
-    code=$?
-    err=$(<$home/err)
-    assert_code 'invalid fetch reference fails' 1 $code
-    assert 'invalid fetch reference message' 'invalid secret reference' "$err"
-
-    out=$(dls fetch op://Private/github/token 2> $home/err)
-    code=$?
-    err=$(<$home/err)
-    assert_code 'op reference is not a DLS reference' 1 $code
-    assert 'op reference rejection is explained' 'invalid secret reference' "$err"
-
-    out=$(dls clear 2> $home/err)
-    assert_code 'clear exits zero' 0 $?
-    assert 'clear reports the cached token' 'cleared 1' "$out"
+    for removed in fetch clear; do
+        out=$(dls $removed 2> $home/err)
+        code=$?
+        err=$(<$home/err)
+        assert_code "$removed is no longer a public command" 1 $(( code != 0 ))
+        assert "$removed reports the ordinary unknown command" 'no such command' "$err"
+    done
 
     out=$(dls stop 2> $home/err)
     assert_code 'stop exits zero' 0 $?

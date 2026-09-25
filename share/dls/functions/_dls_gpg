@@ -1,0 +1,13 @@
+emulate -L zsh
+
+# Like _dls_op, withhold broker/capture descriptors from an agent that may
+# outlive this command. Machine status uses stderr; plaintext uses stdout.
+(
+    typeset _dls_fd_path
+    integer _dls_fd
+    for _dls_fd_path in /dev/fd/<3->(N); do
+        _dls_fd=${_dls_fd_path:t}
+        { exec {_dls_fd}>&- } 2>/dev/null
+    done
+    command gpg --no-options "$@"
+)

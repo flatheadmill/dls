@@ -1,0 +1,13 @@
+emulate -L zsh
+
+# Called by request resolution with its account batch in dynamic scope. The
+# source decision precedes account bookkeeping, so a snapshot miss cannot even
+# sign out an account, much less fetch from it.
+typeset _dls_ref=$1
+(( ${+_dls_cache[$_dls_ref]} )) && return 0
+if [[ $_dls_source != op ]]; then
+    REPLY="dls: reference absent from the startup snapshot: ${(qqq)_dls_ref}"
+    return 1
+fi
+_dls_attempted_accounts+=( "${_dls_ref%%/*}" )
+dls_fetch "$_dls_ref"

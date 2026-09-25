@@ -1,0 +1,32 @@
+emulate -L zsh
+
+# Configuration is admitted at the same restart gate as command code.
+# Reject a malformed secrets table before the server binds its socket;
+# surfacing this later as a command failure would blame the caller for an
+# operator configuration error.
+typeset _dls_entry _dls_command _dls_key _dls_table
+for _dls_table in dls_secrets dls_files; do
+    for _dls_entry in ${(ok)${(P)_dls_table}}; do
+        if [[ $_dls_entry != *:* ]]; then
+            abend 'fatal: invalid %s key %s: expected <command>:<secret-key>' \
+                $_dls_table ${(qqq)_dls_entry}
+        fi
+        _dls_command=${_dls_entry%:*}
+        _dls_key=${_dls_entry##*:}
+        if [[ -z $_dls_command || -z $_dls_key ]]; then
+            abend 'fatal: invalid %s key %s: command and secret key must be nonempty' \
+                $_dls_table ${(qqq)_dls_entry}
+        fi
+        # One key cannot be both shapes. Both tables assign to the same
+        # `$secret` entry, so whichever ran second would silently win.
+        if [[ $_dls_table = dls_files ]] && (( ${+dls_secrets[$_dls_entry]} )); then
+            abend 'fatal: %s is declared in both dls_secrets and dls_files' \
+                ${(qqq)_dls_entry}
+        fi
+    done
+done
+
+case ${dls[source]:-op} in
+(op|snapshot) ;;
+(*) abend 'fatal: invalid dls[source]: expected op or snapshot' ;;
+esac

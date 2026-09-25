@@ -11,7 +11,8 @@ emulate -L zsh
 # entry into a value or a file only when that request is admitted. The
 # reference must already be validated by `dls_ref`. Does NOT sign out of op;
 # the caller owns the account sessions so that it can close every account the
-# batch contacted. Sets REPLY to an error message on failure.
+# batch contacted. Sets REPLY on failure; status 70 is a representation failure
+# that the server must treat as fatal after closing the account batch.
 #
 # SAFETY Raw bytes transit the pipe from `op read` to base64 and do not enter a
 # Zsh scalar. `pocket` captures the encoded output into server memory. No temp
@@ -29,7 +30,8 @@ integer _dls_status
 pocket _dls_out _dls_err _dls_read_base64 $_dls_reference
 _dls_status=$?
 if (( _dls_status == 70 )); then
-    abend 'fatal: unable to encode secret reference %s' $_dls_reference
+    REPLY="dls: unable to encode secret reference $_dls_reference"
+    return 70
 fi
 if (( _dls_status )); then
     case $_dls_err in

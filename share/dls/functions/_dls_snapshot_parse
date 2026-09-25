@@ -1,0 +1,56 @@
+emulate -L zsh -o pipefail -o no_multibyte
+
+# Admit the entire candidate document at once. The inventory and destination
+# cache belong to the caller. All other representations die with this frame.
+typeset _dls_document=$1 _dls_line _dls_key64 _dls_value64 _dls_ref
+typeset -A _dls_loaded=()
+if [[ $_dls_document != $'DLS-SNAPSHOT 1\n'* ]]; then
+    REPLY='unsupported or malformed snapshot header'
+    return 1
+fi
+_dls_document=${_dls_document#$'DLS-SNAPSHOT 1\n'}
+if [[ -n $_dls_document && $_dls_document[-1] != $'\n' ]]; then
+    REPLY='unfinished snapshot record'
+    return 1
+fi
+while [[ -n $_dls_document ]]; do
+    _dls_line=${_dls_document%%$'\n'*}
+    _dls_document=${_dls_document#*$'\n'}
+    if [[ $_dls_line != *$'\t'* ]]; then
+        REPLY='malformed snapshot record'
+        return 1
+    fi
+    _dls_key64=${_dls_line%%$'\t'*}
+    _dls_value64=${_dls_line#*$'\t'}
+    if ! _dls_base64_check "$_dls_key64" ||
+            ! _dls_base64_check "$_dls_value64"; then
+        REPLY='invalid or noncanonical snapshot encoding'
+        return 1
+    fi
+    if ! { builtin print -rn -- "$_dls_key64" |
+            command base64 -d | slurp _dls_ref }; then
+        REPLY='unable to decode snapshot reference'
+        return 1
+    fi
+    if ! dls_ref "$_dls_ref"; then
+        REPLY='invalid reference in snapshot'
+        return 1
+    fi
+    if (( ${+_dls_loaded[$_dls_ref]} )); then
+        REPLY="duplicate snapshot reference: ${(qqq)_dls_ref}"
+        return 1
+    fi
+    _dls_loaded[$_dls_ref]=$_dls_value64
+done
+if (( ${#_dls_loaded} != ${#_dls_inventory} )); then
+    REPLY='snapshot reference set differs from declarations; run a full `dls sync`'
+    return 1
+fi
+for _dls_ref in "${(@)_dls_inventory}"; do
+    if (( ! ${+_dls_loaded[$_dls_ref]} )); then
+        REPLY="snapshot is missing ${(qqq)_dls_ref}; run a full \`dls sync\`"
+        return 1
+    fi
+done
+_dls_cache=( "${(@kv)_dls_loaded}" )
+REPLY=''

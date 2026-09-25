@@ -23,6 +23,21 @@ function dls_socket {
     REPLY=${DLS_SOCKET:-${dls[socket]:-${XDG_RUNTIME_DIR:-$HOME/.local/state/dls}/dls.socket}}
 }
 
+# Load declarations without starting a server. These two bootstrap helpers must
+# come from DLS before the general helper-binding pass can reclaim all names.
+function _dls_prepare {
+    typeset _dls_library=${functions_source[_dls_prepare]:A:h:h}/share/dls/functions
+    typeset _dls_bootstrap
+    for _dls_bootstrap in _dls_load_sources _dls_bind_functions; do
+        (( ${+functions[$_dls_bootstrap]} )) && unfunction $_dls_bootstrap
+        autoload -zUR "$_dls_library/$_dls_bootstrap"
+        autoload -zU +X $_dls_bootstrap ||
+            abend 'fatal: unable to load %s' $_dls_bootstrap
+        $_dls_bootstrap
+    done
+    _dls_validate_config
+}
+
 function :help {
     heredoc -v help <<'    EOF'
         # desc
@@ -37,7 +52,8 @@ function :help {
         `dls` brokers secrets to processes that are not allowed to read them.
 
         A `dls` server runs outside the sandbox holding secrets in memory,
-        fetched from 1Password with `op read` and cached. Clients connect over a
+        loaded from an OpenPGP snapshot at startup or fetched from 1Password
+        in live mode. Clients connect over a
         Unix domain socket and invoke commands; the server runs the command
         with its configured secrets in a non-exported shell map and replays the
         output. Command code explicitly places selected values or file paths in
@@ -47,7 +63,9 @@ function :help {
         Each `dls` command is a `zshctl` extension command. The server loads
         all registered command and helper code at startup and never reloads;
         activating new or edited code requires a server restart, which is the
-        human approval gate.
+        approval for that server lifetime. `dls sync` separately loads reviewed
+        installed code to replenish one encrypted snapshot. Provider prompts,
+        PINs, and touch do not replace source review.
         ## OPTIONS
         > options
         ## COMMANDS

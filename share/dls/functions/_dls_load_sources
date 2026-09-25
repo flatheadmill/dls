@@ -1,0 +1,29 @@
+emulate -L zsh
+
+# INVARIANT No hot reload. Every line of command code is loaded here,
+# once, at startup, and its checksum recorded for `dls status` to report
+# drift. A running server keeps its loaded command bodies until a reviewed restart.
+# Sync separately reviews and loads disk state for one replenishment session.
+# Neither operation changes the code or values of an existing server.
+typeset -gA _dls_checksums=()
+typeset key src
+for key in ${(k)zshctl}; do
+    [[ $key = :execute:* ]] || continue
+    src=$zshctl[$key]
+    [[ ${src[1]} = / ]] || continue
+    source $src || abend 'fatal: unable to source `%s`' $src
+    # This is the line that makes the no-reload invariant above real.
+    # Having sourced the command file once, we overwrite its zshctl entry
+    # (the source path) with ':', a no-op, so zshctl's delegate never
+    # lazily re-sources it on a later call. Drop this and every DLS command
+    # re-reads the file from disk, and agent-edited command code goes live
+    # without a restart — the approval gate, gone.
+    zshctl[$key]=':'
+    _dls_checksums[$src]="$(cksum < $src)"
+done
+# The function libraries beside the command trees are code too.
+typeset -aU roots=( ${(@)${(k)_dls_checksums}%%/commands/*} )
+typeset file
+for file in ${^roots}/functions/*(N.); do
+    _dls_checksums[$file]="$(cksum < $file)"
+done

@@ -22,19 +22,31 @@ configuration key names only the map entry. The request directory is removed
 when the command finishes. A value containing a newline or null byte is refused
 rather than silently changing shape.
 
-Secrets are fetched from 1Password with `op read` on first use, encoded
-directly into canonical single-line base64, and cached in server memory. Every
-content read from the cache passes through one decoder before becoming a value
-or a request file; the request interface does not expose the encoded
-representation. Cold secrets are fetched through their named accounts, then
-each account contacted by the batch is signed out and left cold again. Because
-fetches are rare, each authorization prompt stays a deliberate event: an
-unexpected prompt is an alarm, not an inconvenience.
+With `dls[source]=snapshot`, startup announces one OpenPGP decrypt using the
+full actual encryption key fingerprint in `dls[recipient]`. GnuPG handles the
+PIN and the token enforces its configured touch policy. The complete document
+must pass key, integrity, encoding, and exact declaration-inventory checks
+before the cache is populated and the socket binds. The default artifact is
+`~/.local/state/dls/snapshot.gpg`, overridden by `dls[snapshot]`. There is no live
+fallback, partial readiness, or per-command decrypt.
+
+Without enrollment, `dls[source]` defaults to `op`. Live mode fetches cold
+references from 1Password, encodes them directly into canonical single-line
+base64, and signs out each account contacted by that batch. Artifact presence
+never selects the source. Both sources fill the same canonical cache; every
+content exit passes through the existing decoder into a value or request file.
+Delivery shape remains a request concern.
+
+The snapshot parent holds the complete declared inventory for its lifetime.
+`dls sync` changes ciphertext, and this process never rereads it. Stop and start
+the foreground server to load replenished values. Live-mode rotation likewise
+uses a new server start; `fetch` and `clear` are no longer controls.
 
 All command and library code registered at startup is loaded before the socket
 binds. New or edited code is inert until a human restarts the server; the
-restart is the approval gate through which agent authored code gains access to
-secrets. A missing helper or one with a syntax error aborts startup rather than
+restart approves code for that server lifetime. Synchronization is a separate
+reviewed start for the installed code it loads. A PIN, touch, or provider prompt
+does not replace source review. A missing helper or one with a syntax error aborts startup rather than
 remaining a deferred failure on first use: that refusal is the gate working.
 `dls status` reports drift in the source set recorded at startup.
 
