@@ -1,4 +1,5 @@
 emulate -L zsh
+unsetopt BG_NICE
 
 # usage: _dls_call <kind> <name> <words...>
 #
