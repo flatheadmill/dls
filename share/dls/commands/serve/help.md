@@ -30,6 +30,15 @@ before the cache is populated and the socket binds. The default artifact is
 `~/.local/state/dls/snapshot.gpg`, overridden by `dls[snapshot]`. There is no live
 fallback, partial readiness, or per-command decrypt.
 
+The separate token bundle defaults to `~/.local/state/dls/tokens.gpg`, overridden
+by `dls[tokens]`. If it exists, startup decrypts and validates the complete
+bundle with `dls[recipient]` before binding, in either source mode. It adds one
+decryption regardless of record count. An absent bundle adds none. Foreground
+extensions may submit one opaque record through `dls_token_put`; the running
+parent merges and atomically encrypts each update before acknowledging it.
+These records are separate from the snapshot and are not delivered to ordinary
+command islands. DLS checks their custody envelope, not application semantics.
+
 Without enrollment, `dls[source]` defaults to `op`. Live mode fetches cold
 references from 1Password, encodes them directly into canonical single-line
 base64, and signs out each account contacted by that batch. Artifact presence

@@ -1,0 +1,30 @@
+emulate -L zsh
+
+# Only the parent calls this function. A put merges one record into its current
+# map. Failed enrollment publication changes neither that map nor ciphertext.
+typeset _dls_frame _dls_document _dls_err
+typeset -a reply
+[[ -n $_dls_tokens_pin ]] || {
+    REPLY='configure dls[recipient] before storing tokens'
+    return 78
+}
+_dls_token_receive "$1" || return $?
+_dls_frame=$REPLY
+if [[ $_dls_frame != $'DLS-TOKEN 1\n'* || $_dls_frame[-1] != $'\n' ]]; then
+    REPLY='incomplete or unsupported token frame'
+    return 65
+fi
+_dls_frame=${_dls_frame#$'DLS-TOKEN 1\n'}
+_dls_frame=${_dls_frame%$'\n'}
+_dls_token_record "$_dls_frame" || return 65
+typeset -A _dls_next_tokens=( "${(@kv)_dls_tokens}" )
+_dls_next_tokens[$reply[1]]=$reply[2]
+if ! pocket _dls_document _dls_err _dls_tokens_write; then
+    REPLY='unable to encode token bundle'
+    return 74
+fi
+_dls_encrypted_store "$_dls_tokens_path" "$_dls_tokens_pin" \
+    "$_dls_document" 'token bundle' || return 74
+_dls_tokens=( "${(@kv)_dls_next_tokens}" )
+REPLY=''
+return 0

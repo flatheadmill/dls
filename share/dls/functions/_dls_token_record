@@ -1,0 +1,28 @@
+emulate -L zsh -o no_multibyte
+
+# One custody record: canonical base64 application, identity, and opaque bytes.
+# The encoded pair is an unambiguous internal key; ':' is not base64 data.
+# No provider fields are interpreted here.
+typeset _dls_line=$1 _dls_application _dls_identity _dls_value _dls_part
+typeset -a _dls_fields _dls_limits=( 1024 1024 65536 )
+integer _dls_i _dls_size
+REPLY='invalid token record'
+[[ $_dls_line = *$'\t'* ]] || return 1
+_dls_application=${_dls_line%%$'\t'*}
+_dls_line=${_dls_line#*$'\t'}
+[[ $_dls_line = *$'\t'* ]] || return 1
+_dls_identity=${_dls_line%%$'\t'*}
+_dls_value=${_dls_line#*$'\t'}
+_dls_fields=( "$_dls_application" "$_dls_identity" "$_dls_value" )
+for _dls_i in {1..3}; do
+    _dls_part=$_dls_fields[$_dls_i]
+    [[ -n $_dls_part ]] || return 1
+    (( ${#_dls_part} <= 4 * ((_dls_limits[$_dls_i] + 2) / 3) )) || return 1
+    _dls_base64_check "$_dls_part" || return 1
+    (( _dls_size = ${#_dls_part} / 4 * 3 ))
+    [[ $_dls_part != *= ]] || (( _dls_size-- ))
+    [[ $_dls_part != *== ]] || (( _dls_size-- ))
+    (( _dls_size > 0 && _dls_size <= _dls_limits[$_dls_i] )) || return 1
+done
+reply=( "${_dls_application}:${_dls_identity}" "$_dls_value" )
+REPLY=''

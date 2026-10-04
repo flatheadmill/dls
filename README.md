@@ -240,6 +240,26 @@ If a key is lost, reset, or replaced, provision another key outside DLS, review 
 
 This is an attended workstation workflow. Background startup, daemonization, a restart command, and remote agent forwarding are outside this interface.
 
+## Opaque token custody
+
+A foreground extension can submit one application-owned record to the running server with `dls_token_put <application> <identity>`. The helper reads the opaque record from standard input. For a record already held in a Zsh variable:
+
+```zsh
+builtin print -rn -- "$record" | dls_token_put example "$identity"
+```
+
+This is an extension helper, not a new top-level command. The extension creates and validates its application data. DLS checks only the custody envelope; it does not interpret provider fields or run submitted data as code. Each identity is scoped by its application. A put replaces that one record while preserving every other record in the parent's current map. The interface provides no read, delete, or whole-bundle replacement operation.
+
+The helper captures the record in memory and sends it through a mode-0600 FIFO in its private mode-0700 transaction directory. Neither the record nor its encoded representation enters the control socket, external command arguments, or ordinary output. Application and identity each contain 1–1024 bytes; the opaque record contains 1–65536 bytes, including binary data. The parent permits at most 128 KiB of framed input and five seconds for the complete transfer through EOF. Missing producers, incomplete frames, extra records, and oversized input refuse without changing the map or ciphertext.
+
+The separate bundle defaults to `~/.local/state/dls/tokens.gpg`; `dls[tokens]` may specify another absolute path, distinct from `dls[snapshot]`. It uses the same full `dls[recipient]` encryption-key fingerprint, mode-0700 parent directory, and mode-0600 ciphertext conventions as snapshots. The parent encrypts a complete candidate bundle to a neighboring temporary file and atomically replaces the destination before changing its current map and acknowledging the put. Failed encryption or replacement preserves both the previous map and ciphertext. A caller that loses its connection after publication cannot infer that the put failed.
+
+An absent bundle causes no decryption and requires no recipient until the first put. An existing bundle is completely decrypted and validated before the socket binds, in either source mode. A failed load aborts startup. Any number of records requires one token-bundle decryption, in addition to the snapshot decryption when that source is selected. Puts need only the public key and do not add a touch. `dls sync` does not read or overwrite this bundle. `dls status` reports the number of records held by the running parent.
+
+The wire frame is `DLS-TOKEN 1` followed by one newline-terminated row of three tab-separated canonical-base64 fields: application, identity, and opaque record. The encrypted plaintext bundle uses `DLS-TOKENS 1` followed by zero or more rows of the same shape, with unique application/identity pairs. Both headers end with a newline. Framing is a storage and transfer convention, not an application schema.
+
+Ordinary command islands do not inherit the broad token map. This custody interface does not yet supply records or access values to operations, perform authorization, or refresh credentials. Those behaviors belong to a later extension integration. Foreground extensions run their currently installed code; the running server retains the custody and command bodies admitted at its own start.
+
 ## What DLS guarantees
 
 For a command that a human has approved and started:
@@ -247,12 +267,12 @@ For a command that a human has approved and started:
 - the server retains one canonical base64 cache, filled completely at snapshot startup or lazily from 1Password in live mode;
 - a snapshot server holds the complete declared inventory for its lifetime, while each request retains its own narrow admission;
 - a request receives only the values and file paths declared for its operation;
-- server cache parameters are removed before command code runs;
+- server cache and token-map parameters are removed before command code runs;
 - a value reaches an external process only when command code explicitly places it in that process's environment;
 - a value does not cross the control socket, appear in external `argv`, or rest on disk as plaintext; snapshots contain only ciphertext and file delivery remains explicit;
 - DLS materializes a file secret only at its request path and removes it with the request;
 - stdout and stderr are masked against exact occurrences of that request's admitted values when they are at least four characters long; and
-- command and helper edits remain inert until the server is restarted.
+- server command and helper bodies remain unchanged until the server is restarted.
 
 ## What DLS does not guarantee
 
@@ -277,5 +297,6 @@ ok: gate (gate: PASS)
 ok: multiple-secrets (multiple-secrets: PASS)
 ok: smoke (smoke: PASS)
 ok: snapshot (snapshot: PASS)
-all: 5 suites passed
+ok: tokens (tokens: PASS)
+all: 6 suites passed
 ```

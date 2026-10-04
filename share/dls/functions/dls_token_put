@@ -1,0 +1,26 @@
+emulate -L zsh -o pipefail -o no_multibyte
+
+# Foreground extension API: dls_token_put <application> <identity>
+# Input is opaque bytes, never an external argument or a control-socket value.
+# Complete the local capture before asking the parent to read the private FIFO.
+(( $# == 2 )) || {
+    print -r -u 2 -- 'dls_token_put requires an application and record identity'
+    return 64
+}
+typeset _dls_application _dls_identity _dls_record _dls_line REPLY
+typeset -a reply
+slurp _dls_record || return 74
+if (( ! ${#1} || ${#1} > 1024 || ! ${#2} || ${#2} > 1024 ||
+        ! ${#_dls_record} || ${#_dls_record} > 65536 )); then
+    print -r -u 2 -- 'dls: token identities require 1..1024 bytes; record requires 1..65536 bytes'
+    return 65
+fi
+_dls_application=$(builtin print -rn -- "$1" | command base64 | command tr -d '\n') || return 74
+_dls_identity=$(builtin print -rn -- "$2" | command base64 | command tr -d '\n') || return 74
+_dls_record=$(builtin print -rn -- "$_dls_record" | command base64 | command tr -d '\n') || return 74
+_dls_line="$_dls_application"$'\t'"$_dls_identity"$'\t'"$_dls_record"
+_dls_token_record "$_dls_line" || return 65
+{
+    builtin print -r -- 'DLS-TOKEN 1'
+    builtin print -r -- "$_dls_line"
+} | _dls_call token-put -

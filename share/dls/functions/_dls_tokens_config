@@ -1,0 +1,21 @@
+emulate -L zsh -o extendedglob
+
+typeset _dls_path=${dls[tokens]:-$HOME/.local/state/dls/tokens.gpg}
+typeset _dls_snapshot=${dls[snapshot]:-$HOME/.local/state/dls/snapshot.gpg}
+typeset _dls_pin=${(U)dls[recipient]}
+if [[ $_dls_path != /* || $_dls_path = */ ]]; then
+    REPLY='dls[tokens] must be an absolute file path'
+    return 1
+fi
+if [[ ${_dls_path:A} = ${_dls_snapshot:A} ]]; then
+    REPLY='dls[tokens] and dls[snapshot] must be different files'
+    return 1
+fi
+# An installation without a bundle needs no key or extra startup ceremony.
+# Once configured, the same exact recipient serves both encrypted artifacts.
+if [[ -n $_dls_pin ]] && { [[ $_dls_pin != [[:xdigit:]]## ]] ||
+        (( ${#_dls_pin} != 40 && ${#_dls_pin} != 64 )); }; then
+    REPLY='dls[recipient] must be the full encryption key fingerprint'
+    return 1
+fi
+reply=( "$_dls_path" "$_dls_pin" )

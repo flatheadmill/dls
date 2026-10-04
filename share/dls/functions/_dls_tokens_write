@@ -1,0 +1,9 @@
+emulate -L zsh
+
+# The prospective map belongs to the parent transaction, not the submitter.
+typeset _dls_key
+builtin print -r -- 'DLS-TOKENS 1' || return 1
+for _dls_key in "${(@ok)_dls_next_tokens}"; do
+    builtin print -r -- "${_dls_key%%:*}"$'\t'"${_dls_key#*:}"$'\t'"$_dls_next_tokens[$_dls_key]" || return 1
+done
+return 0

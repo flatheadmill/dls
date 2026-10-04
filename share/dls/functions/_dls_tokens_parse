@@ -1,0 +1,29 @@
+emulate -L zsh
+
+# Parse into a temporary map; a damaged bundle never partially populates state.
+typeset _dls_document=$1 _dls_line
+typeset -A _dls_loaded_tokens=()
+typeset -a reply _dls_lines
+if [[ $_dls_document != $'DLS-TOKENS 1\n'* ]]; then
+    REPLY='unsupported or malformed token bundle header'
+    return 1
+fi
+if [[ $_dls_document[-1] != $'\n' ]]; then
+    REPLY='unfinished token bundle record'
+    return 1
+fi
+# Split once, retaining empty rows for validation. Repeated shortest-prefix
+# glob removal is quadratic for a long encoded record.
+_dls_lines=( "${(@f)_dls_document}" )
+shift _dls_lines
+_dls_lines[-1]=()
+for _dls_line in "${(@)_dls_lines}"; do
+    _dls_token_record "$_dls_line" || return 1
+    if (( ${+_dls_loaded_tokens[$reply[1]]} )); then
+        REPLY='duplicate token bundle record'
+        return 1
+    fi
+    _dls_loaded_tokens[$reply[1]]=$reply[2]
+done
+_dls_tokens=( "${(@kv)_dls_loaded_tokens}" )
+REPLY=''
