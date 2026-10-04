@@ -157,7 +157,7 @@ function _dls_run_execute {
                     # `$request_dir` is its private scratch. The global caches
                     # belong to the server, not command code; sibling masker
                     # forks retain their copies of the mask list.
-                    unset _dls_cache _dls_masks _dls_tokens
+                    unset _dls_cache _dls_masks _dls_tokens _dls_token_states
                     typeset request_dir=$_dls_request
                     ":dls:${name}" "$@"
                 )
@@ -337,6 +337,12 @@ function _dls_handle_execute {
             "${REPLY:-dls: unable to resolve secrets}"$'\n'
         return
     fi
+    if ! _dls_admit "$name" "$@"; then
+        rm -rf $_dls_request
+        _dls_reply $conn "$out" "$err" 69 '' \
+            $'dls: request admission failed; verify extension state and token storage\n'
+        return
+    fi
     _dls_run_execute $conn "$name" "$cwd" "$out" "$err" "$in" "$@"
 }
 
@@ -465,6 +471,8 @@ function :execute:serve {
     typeset -g _dls_source=${dls[source]:-op} _dls_recipient=''
     typeset -gA _dls_cache=()
     typeset -gA _dls_tokens=()
+    typeset -gA _dls_token_states=()
+    typeset -gi _dls_tokens_dirty=0
     typeset -ga _dls_masks=()
     typeset -gi _dls_running=1 _dls_started=$EPOCHSECONDS _dls_listen=-1
 

@@ -1,0 +1,35 @@
+emulate -L zsh
+
+# The command tree is the registry: this optional body was sourced and pinned
+# alongside :dls:<name>. Its arguments are the operation's arguments, without
+# any core interpretation of identity, provider, response fields, or expiry.
+typeset _dls_name=$1
+shift
+(( ${+functions[:admit:${_dls_name}]} )) || return 0
+
+# Retry a previous unpublished rotation before extension code can use state or
+# contact the provider again. Other operations without a hook remain usable.
+_dls_tokens_flush >/dev/null 2>&1 || return 69
+integer _dls_admission_active=1 _dls_admission_failed=0 _dls_code=0
+typeset _dls_selected='' token_state='' REPLY=''
+typeset -a _dls_keyed=()
+typeset _dls_value
+{
+    # This is a direct parent call: a command substitution would discard all
+    # changes. Minted values cannot be known to the ordinary output masker, so
+    # neither hook stream nor its REPLY becomes diagnostics or client output.
+    ":admit:${_dls_name}" "$@" < /dev/null > /dev/null 2>&1 || _dls_code=$?
+} always {
+    if [[ -n $_dls_selected ]]; then
+        _dls_token_states[$_dls_selected]=$token_state
+    fi
+    # A replacement survives even a later hook failure; persistence is still
+    # owed. No command island is launched if either admission or saving fails.
+    _dls_tokens_flush > /dev/null 2>&1 || _dls_code=74
+}
+(( ! _dls_code && ! _dls_admission_failed )) || return 69
+for _dls_value in "${(@)_dls_masks}"; do
+    _dls_keyed+=( "${#_dls_value}:$_dls_value" )
+done
+_dls_masks=( "${(@)${(@On)_dls_keyed}#*:}" )
+return 0

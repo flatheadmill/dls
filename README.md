@@ -258,7 +258,25 @@ An absent bundle causes no decryption and requires no recipient until the first 
 
 The wire frame is `DLS-TOKEN 1` followed by one newline-terminated row of three tab-separated canonical-base64 fields: application, identity, and opaque record. The encrypted plaintext bundle uses `DLS-TOKENS 1` followed by zero or more rows of the same shape, with unique application/identity pairs. Both headers end with a newline. Framing is a storage and transfer convention, not an application schema.
 
-Ordinary command islands do not inherit the broad token map. This custody interface does not yet supply records or access values to operations, perform authorization, or refresh credentials. Those behaviors belong to a later extension integration. Foreground extensions run their currently installed code; the running server retains the custody and command bodies admitted at its own start.
+Foreground extensions run their currently installed code; the running server retains the custody and command bodies admitted at its own start. Authorization stays in the foreground extension. There is no server enrollment worker or public read operation.
+
+## Selected-record admission
+
+An operation may define `:admit:<operation>` alongside its `:dls:<operation>` body in the installed command file. Startup pins both bodies and their helper functions. After resolving static declarations, the server calls the optional hook directly in its parent, with the same arguments that the command body will receive. The extension decides how those arguments select an identity; DLS imposes no account position or provider schema.
+
+The hook has three helpers:
+
+- `dls_token_select <application> <identity>` selects one existing record, returns its opaque bytes in `REPLY`, and loads that record's opaque in-memory scalar into `token_state`. A second selection in the same hook is refused. The helper exposes neither a record listing nor the complete map.
+- `dls_token_replace <record>` replaces the selected record in parent memory after checking the same 1–65536-byte custody bound. The extension must validate application semantics before calling it. Call it directly in the hook, immediately after validating a provider replacement; a pipeline or command substitution that forks the caller would lose its changes.
+- `dls_admit <key> <value>` adds one scalar to this request's `$secret` map and masks. Selection must precede admission. Keys must be nonempty, without colons, newlines, or null bytes, and cannot collide with static values, files, or earlier additions. Values follow the existing scalar rule: no newline or null byte. Multiple values may be admitted from the selected record.
+
+`token_state` starts empty for a record with no runtime state. The hook may assign any opaque scalar to it, for example its own encoding of a cached value and expiry. DLS saves it in parent memory when the hook returns, including when the hook reports failure, and interprets none of its fields. Successful foreground puts invalidate only the replaced record's runtime state. Restart discards all runtime state. Provider exchange, response parsing, renewal decisions, and timeouts belong to the extension. The parent serializes hooks, so concurrent requests share completed renewal; a slow hook delays subsequent requests.
+
+Call the helpers directly and check their return statuses. A helper refusal also refuses the request even if the hook ignores it. The hook's standard input is `/dev/null`; its stdout, stderr, and `REPLY` are private and discarded. A nonzero hook result returns a fixed admission error without launching the command. Hooks must return rather than call `exit` or `abend`, which would terminate their server parent. Approved extension code is trusted; these helpers are a narrow interface, not a sandbox around that code.
+
+A validated replacement becomes authoritative in parent memory immediately. Before launching the command, DLS encrypts and atomically publishes the complete current bundle, even if the hook subsequently fails. Failed publication retains the replacement and runtime state, refuses the request, and retries publication before entering the next admission hook. It never falls back to the preceding record. Operations without hooks remain available. A successful foreground put also publishes any pending replacements with the merged bundle. A crash or stop before successful publication may require authorization again: provider rotation and local storage cannot form one transaction.
+
+The hook's selected record, runtime scalar, and other locals expire before the ordinary command fork. Broad durable and runtime maps are unset before `:dls:<operation>` runs. Only values added through `dls_admit` join the operation's static values and file paths in `$secret`; exact output masking uses that request's scalar values, longest first. Opaque records and runtime state are never automatically delivered or masked.
 
 ## What DLS guarantees
 
@@ -266,8 +284,8 @@ For a command that a human has approved and started:
 
 - the server retains one canonical base64 cache, filled completely at snapshot startup or lazily from 1Password in live mode;
 - a snapshot server holds the complete declared inventory for its lifetime, while each request retains its own narrow admission;
-- a request receives only the values and file paths declared for its operation;
-- server cache and token-map parameters are removed before command code runs;
+- a request receives only its declared values and file paths, plus values admitted by its pinned selected-record hook;
+- server cache, token-map, and runtime-state parameters are removed before command code runs;
 - a value reaches an external process only when command code explicitly places it in that process's environment;
 - a value does not cross the control socket, appear in external `argv`, or rest on disk as plaintext; snapshots contain only ciphertext and file delivery remains explicit;
 - DLS materializes a file secret only at its request path and removes it with the request;
@@ -276,7 +294,7 @@ For a command that a human has approved and started:
 
 ## What DLS does not guarantee
 
-DLS is not a sandbox around approved code. The server operator, another process running as the same user, or an approved command can read or disclose secrets. The human review is therefore substantive: approval grants the command access to every secret declared for it.
+DLS is not a sandbox around approved code. The server operator, another process running as the same user, or an approved command can read or disclose secrets. The human review is therefore substantive: review both static declarations and the operation's admission hook.
 
 The output filter is exact and line-oriented. It does not conceal transformed values, file contents, or output sent somewhere other than stdout or stderr. A command that prints a credential, copies it elsewhere, or hands its environment to an extensible child has violated its own operation contract.
 
@@ -292,11 +310,12 @@ The test suite uses disposable homes, software OpenPGP keys, and a fake `op`; it
 
 ```console
 $ zsh test/all.zsh
+ok: admission (admission: PASS)
 ok: files (files: PASS)
 ok: gate (gate: PASS)
 ok: multiple-secrets (multiple-secrets: PASS)
 ok: smoke (smoke: PASS)
 ok: snapshot (snapshot: PASS)
 ok: tokens (tokens: PASS)
-all: 6 suites passed
+all: 7 suites passed
 ```
