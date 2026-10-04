@@ -1,12 +1,11 @@
 emulate -L zsh -o pipefail
 
-typeset _dls_path=$1 _dls_pin=$2 _dls_document _dls_err _dls_temp=''
-typeset _dls_reference_word=references
+typeset _dls_path=$1 _dls_pin=$2 _dls_document _dls_err
 integer _dls_reference_count=$3
-# The foreground sync owns cancellation; a successful child must not turn a
-# cancelled run into a publication. Returns still pass through temp cleanup.
+typeset _dls_reference_word=references
 (( ! _dls_cancelled )) || return $_dls_cancelled
-_dls_snapshot_directory "$_dls_path" create || return 1
+# Check the destination before encoding or announcing encryption.
+_dls_state_directory "$_dls_path" create snapshot || return 1
 if [[ -e $_dls_path && ! -f $_dls_path ]]; then
     REPLY="snapshot destination is not a file: $_dls_path"
     return 1
@@ -16,37 +15,6 @@ if ! pocket _dls_document _dls_err _dls_snapshot_write; then
     return 1
 fi
 _dls_snapshot_parse "$_dls_document" || return 1
-(( ! _dls_cancelled )) || return $_dls_cancelled
-_dls_temp=$(command mktemp "${_dls_path:h}/.dls-snapshot.XXXXXX") || {
-    REPLY='unable to create temporary ciphertext'
-    return 1
-}
-{
-    (( ! _dls_cancelled )) || return $_dls_cancelled
-    (( _dls_reference_count == 1 )) && _dls_reference_word=reference
-    builtin print -r -u 2 -- \
-        "dls: encrypting complete snapshot with ${_dls_reference_count} ${_dls_reference_word}"
-    (( ! _dls_cancelled )) || return $_dls_cancelled
-    # Only ciphertext reaches this file. --no-options excludes ambient extra
-    # recipients; the ! suffix pins the exact encryption key, including subkeys.
-    if ! { builtin print -rn -- "$_dls_document" |
-            _dls_gpg --batch --trust-model always --no-encrypt-to \
-                --recipient "${_dls_pin}!" --output - --encrypt > "$_dls_temp" }; then
-        REPLY='snapshot encryption failed; previous snapshot retained'
-        return 1
-    fi
-    (( ! _dls_cancelled )) || return $_dls_cancelled
-    if [[ ! -s $_dls_temp ]] || ! command chmod 600 "$_dls_temp"; then
-        REPLY='unable to replace snapshot; previous snapshot retained'
-        return 1
-    fi
-    (( ! _dls_cancelled )) || return $_dls_cancelled
-    if ! command mv -f -- "$_dls_temp" "$_dls_path"; then
-        REPLY='unable to replace snapshot; previous snapshot retained'
-        return 1
-    fi
-} always {
-    command rm -f -- "$_dls_temp"
-}
-REPLY=''
-return 0
+(( _dls_reference_count == 1 )) && _dls_reference_word=reference
+_dls_encrypted_store "$_dls_path" "$_dls_pin" "$_dls_document" snapshot \
+    "dls: encrypting complete snapshot with ${_dls_reference_count} ${_dls_reference_word}"

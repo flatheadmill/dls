@@ -1,0 +1,52 @@
+emulate -L zsh
+zmodload zsh/stat || return 1
+
+typeset _dls_path=$1 _dls_pin=$2 _dls_label=$3 _dls_description=$4
+typeset _dls_document _dls_diagnostics _dls_line
+typeset -a _dls_words
+typeset -A _dls_stat
+_dls_state_directory "$_dls_path" existing "$_dls_label" || return 1
+if [[ ! -f $_dls_path ]] || ! zstat -H _dls_stat -- "$_dls_path" ||
+        (( (_dls_stat[mode] & 8#777) != 8#600 || _dls_stat[uid] != EUID )); then
+    REPLY="$_dls_label must exist and be owned by you with mode 0600: $_dls_path"
+    return 1
+fi
+
+builtin print -r -u 2 -- "dls: decrypting $_dls_description; touch the Nitrokey"
+if ! pocket _dls_document _dls_diagnostics _dls_gpg --batch \
+        --status-fd 2 --output - --decrypt -- "$_dls_path"; then
+    REPLY="$_dls_label decryption failed; no values loaded"
+    return 1
+fi
+
+# Exit success alone also accepts literal or symmetric-only packets. Require
+# one authenticated public-key decryption with the pinned actual key. Modern
+# GnuPG uses DECRYPTION_OKAY for both MDC and AEAD; GOODMDC is not required.
+integer _dls_keys=0 _dls_ok=0 _dls_end=0 _dls_integrity=0
+for _dls_line in "${(@f)_dls_diagnostics}"; do
+    _dls_words=( ${(s: :)_dls_line} )
+    case $_dls_line in
+    ('[GNUPG:] DECRYPTION_KEY '*)
+        [[ $_dls_words[3] = "$_dls_pin" ]] || {
+            REPLY="$_dls_label used a different decryption key than dls[recipient]"
+            return 1
+        }
+        (( _dls_keys++ ))
+        ;;
+    ('[GNUPG:] DECRYPTION_INFO '*)
+        if [[ $_dls_words[3] = <-> && $_dls_words[4] = <-> ]]; then
+            (( _dls_words[3] > 0 )) && _dls_integrity=1
+            if [[ ${_dls_words[5]:-0} = <-> ]]; then
+                (( ${_dls_words[5]:-0} > 0 )) && _dls_integrity=1
+            fi
+        fi
+        ;;
+    ('[GNUPG:] DECRYPTION_OKAY') (( _dls_ok++ )) ;;
+    ('[GNUPG:] END_DECRYPTION') (( _dls_end++ )) ;;
+    esac
+done
+if (( _dls_keys != 1 || _dls_ok != 1 || _dls_end != 1 || ! _dls_integrity )); then
+    REPLY="$_dls_label lacks a complete authenticated decryption with the pinned key"
+    return 1
+fi
+REPLY=$_dls_document

@@ -1,0 +1,43 @@
+emulate -L zsh -o pipefail
+
+# The document is an in-process argument, never an external command argument.
+# Callers may supply their cancellation flag through dynamic scope.
+typeset _dls_path=$1 _dls_pin=$2 _dls_document=$3 _dls_label=$4
+typeset _dls_progress=${5:-} _dls_temp=''
+(( ! ${_dls_cancelled:-0} )) || return $_dls_cancelled
+_dls_state_directory "$_dls_path" create "$_dls_label" || return 1
+if [[ -e $_dls_path && ! -f $_dls_path ]]; then
+    REPLY="$_dls_label destination is not a file: $_dls_path"
+    return 1
+fi
+_dls_temp=$(command mktemp "${_dls_path:h}/.dls-${_dls_label// /-}.XXXXXX") || {
+    REPLY='unable to create temporary ciphertext'
+    return 1
+}
+{
+    (( ! ${_dls_cancelled:-0} )) || return $_dls_cancelled
+    [[ -z $_dls_progress ]] || builtin print -r -u 2 -- "$_dls_progress"
+    (( ! ${_dls_cancelled:-0} )) || return $_dls_cancelled
+    # Only ciphertext reaches this file. --no-options excludes ambient extra
+    # recipients; the ! suffix pins the exact encryption key, including subkeys.
+    if ! { builtin print -rn -- "$_dls_document" |
+            _dls_gpg --batch --trust-model always --no-encrypt-to \
+                --recipient "${_dls_pin}!" --output - --encrypt > "$_dls_temp" }; then
+        REPLY="$_dls_label encryption failed; previous $_dls_label retained"
+        return 1
+    fi
+    (( ! ${_dls_cancelled:-0} )) || return $_dls_cancelled
+    if [[ ! -s $_dls_temp ]] || ! command chmod 600 "$_dls_temp"; then
+        REPLY="unable to replace $_dls_label; previous $_dls_label retained"
+        return 1
+    fi
+    (( ! ${_dls_cancelled:-0} )) || return $_dls_cancelled
+    if ! command mv -f -- "$_dls_temp" "$_dls_path"; then
+        REPLY="unable to replace $_dls_label; previous $_dls_label retained"
+        return 1
+    fi
+} always {
+    command rm -f -- "$_dls_temp"
+}
+REPLY=''
+return 0
