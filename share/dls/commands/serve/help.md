@@ -38,6 +38,13 @@ extensions may submit one opaque record through `dls_token_put`; the running
 parent merges and atomically encrypts each update before acknowledging it.
 These records are separate from the snapshot and are not delivered to ordinary
 command islands. DLS checks their custody envelope, not application semantics.
+An optional pinned `:admit:<operation>` hook runs in the parent before an
+ordinary command forks. It selects one record with `dls_token_select`, keeps
+opaque runtime state in `token_state`, and adds request-local scalar values
+with `dls_admit`. A `dls_token_replace` replacement remains authoritative in
+memory if publication fails; the request refuses until storage succeeds.
+Provider semantics and renewal decisions belong to the extension. Both broad
+token maps are removed before the ordinary command body runs.
 
 Without enrollment, `dls[source]` defaults to `op`. Live mode fetches cold
 references from 1Password, encodes them directly into canonical single-line

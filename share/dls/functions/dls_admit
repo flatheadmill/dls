@@ -1,0 +1,16 @@
+emulate -L zsh
+
+# Only selected-record admission may add scalar values. Refuse key collisions
+# with static values/files and earlier additions rather than silently replacing
+# a declaration. The existing filter handles these values exactly like static
+# scalar secrets; file contents and opaque records never become masks.
+(( ${_dls_admission_active:-0} )) || return 64
+if (( $# != 2 )) || [[ -z $_dls_selected || -z $1 || $1 = *:* ||
+        $1 = *$'\n'* || $1 = *$'\x00'* || $2 = *$'\n'* || $2 = *$'\x00'* ]] ||
+        (( ${+secret[$1]} )); then
+    _dls_admission_failed=1
+    return 65
+fi
+secret[$1]=$2
+_dls_masks+=( "$2" )
+return 0

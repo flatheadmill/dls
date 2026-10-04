@@ -1,0 +1,29 @@
+emulate -L zsh -o pipefail -o no_multibyte
+
+# Parent admission API: choose exactly one application/identity record.
+# Return its bytes in REPLY and load its opaque runtime scalar in token_state.
+(( ${_dls_admission_active:-0} )) || return 64
+if (( $# != 2 || ! ${#1} || ${#1} > 1024 || ! ${#2} || ${#2} > 1024 )) ||
+        [[ -n $_dls_selected ]]; then
+    _dls_admission_failed=1
+    return 65
+fi
+typeset _dls_application _dls_identity _dls_key _dls_record
+_dls_application=$(builtin print -rn -- "$1" | command base64 | command tr -d '\n') &&
+_dls_identity=$(builtin print -rn -- "$2" | command base64 | command tr -d '\n') || {
+    _dls_admission_failed=1
+    return 74
+}
+_dls_key="${_dls_application}:${_dls_identity}"
+if (( ! ${+_dls_tokens[$_dls_key]} )); then
+    _dls_admission_failed=1
+    return 69
+fi
+builtin print -rn -- "$_dls_tokens[$_dls_key]" | command base64 -d | slurp _dls_record || {
+    _dls_admission_failed=1
+    return 74
+}
+_dls_selected=$_dls_key
+token_state=${_dls_token_states[$_dls_key]-}
+REPLY=$_dls_record
+return 0

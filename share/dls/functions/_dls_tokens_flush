@@ -1,0 +1,12 @@
+emulate -L zsh
+
+# Publish the authoritative parent map after rotation. A failed save leaves
+# both this map and its dirty flag intact for retry before the next hook.
+(( _dls_tokens_dirty )) || return 0
+typeset -A _dls_next_tokens=( "${(@kv)_dls_tokens}" )
+typeset _dls_document _dls_err REPLY
+pocket _dls_document _dls_err _dls_tokens_write || return 74
+_dls_encrypted_store "$_dls_tokens_path" "$_dls_tokens_pin" \
+    "$_dls_document" 'token bundle' || return 74
+_dls_tokens_dirty=0
+return 0

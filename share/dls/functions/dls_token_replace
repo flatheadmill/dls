@@ -1,0 +1,18 @@
+emulate -L zsh -o pipefail -o no_multibyte
+
+# The extension has validated the replacement's application semantics. Core
+# checks only the custody envelope. Rotation cannot roll back at the provider:
+# remember the replacement now, even if the later ciphertext write fails.
+(( ${_dls_admission_active:-0} )) || return 64
+if (( $# != 1 || ! ${#1} || ${#1} > 65536 )) || [[ -z $_dls_selected ]]; then
+    _dls_admission_failed=1
+    return 65
+fi
+typeset _dls_encoded
+_dls_encoded=$(builtin print -rn -- "$1" | command base64 | command tr -d '\n') || {
+    _dls_admission_failed=1
+    return 74
+}
+_dls_tokens[$_dls_selected]=$_dls_encoded
+_dls_tokens_dirty=1
+return 0
