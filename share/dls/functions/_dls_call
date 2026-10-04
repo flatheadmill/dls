@@ -6,6 +6,7 @@ unsetopt BG_NICE
 #     _dls_call execute project-list
 #     _dls_call execute-stdin terraform apply
 #     _dls_call control status
+#     _dls_call token-put -
 #
 # Send one request to the dls server and stream its response. The client
 # creates output and error fifos and sends their paths with the request; the
@@ -25,6 +26,7 @@ unsetopt BG_NICE
 #     execute       <name> <cwd> <out-fifo> <err-fifo> <args...>
 #     execute-stdin <name> <cwd> <out-fifo> <err-fifo> <in-fifo> <args...>
 #     control       <name> <cwd> <out-fifo> <err-fifo> <args...>
+#     token-put     -      <cwd> <out-fifo> <err-fifo> <in-fifo>
 #
 # Compatibility: the wire kind is part of the client/server protocol. A
 # new client talking to an old server, or the reverse, will report an
@@ -64,7 +66,7 @@ integer _dls_out_job=0 _dls_err_job=0
         abend -c 74 'fatal: unable to create fifos in %s' $_dls_dir
 
     typeset _dls_in=''
-    if [[ $_dls_kind = execute-stdin ]]; then
+    if [[ $_dls_kind = (execute-stdin|token-put) ]]; then
         _dls_in=$_dls_dir/in
         mkfifo -m 600 $_dls_in ||
             abend -c 74 'fatal: unable to create input fifo in %s' $_dls_dir

@@ -1,0 +1,53 @@
+emulate -L zsh -o no_multibyte
+zmodload zsh/system || return 74
+zmodload zsh/stat || return 74
+zmodload zsh/datetime || return 74
+
+# The sender owns the FIFO and its directory. Read-only, nonblocking open
+# prevents an absent producer from parking accept. One deadline covers the
+# entire transfer, including a producer that keeps a complete frame open.
+typeset _dls_pipe=$1 _dls_chunk _dls_frame=''
+typeset -A _dls_stat
+# sysread expects decimal descriptors even after octal permission arithmetic.
+typeset -i 10 _dls_fd=-1
+integer _dls_code _dls_room
+typeset -F _dls_deadline=$(( EPOCHREALTIME + 5.0 )) _dls_left
+REPLY='token ingress requires a private FIFO'
+[[ -p $_dls_pipe && ! -L $_dls_pipe ]] || return 65
+zstat -H _dls_stat -- "$_dls_pipe" || return 65
+(( _dls_stat[uid] == EUID && (_dls_stat[mode] & 8#777) == 8#600 )) || return 65
+zstat -H _dls_stat -- "${_dls_pipe:h}" || return 65
+(( _dls_stat[uid] == EUID && (_dls_stat[mode] & 8#777) == 8#700 )) || return 65
+sysopen -r -o nonblock,cloexec,nofollow -u _dls_fd "$_dls_pipe" || return 74
+{
+    while true; do
+        (( _dls_left = _dls_deadline - EPOCHREALTIME ))
+        if (( _dls_left <= 0 )); then
+            REPLY='token ingress timed out'
+            return 75
+        fi
+        # Read at most one byte beyond the envelope limit to detect overflow.
+        (( _dls_room = 131073 - ${#_dls_frame} ))
+        (( _dls_room <= 8192 )) || _dls_room=8192
+        sysread -i $_dls_fd -s $_dls_room -t $_dls_left _dls_chunk
+        _dls_code=$?
+        case $_dls_code in
+        (0)
+            _dls_frame+=$_dls_chunk
+            if (( ${#_dls_frame} > 131072 )); then
+                REPLY='token ingress exceeds 128 KiB'
+                return 65
+            fi
+            ;;
+        (5) break ;;
+        (4) REPLY='token ingress timed out'; return 75 ;;
+        (*) REPLY='unable to read token ingress'; return 74 ;;
+        esac
+    done
+} always {
+    # Close before parsing, encryption, or reply forks. No parent-side ingress
+    # descriptor survives this function or needs a pending-worker registry.
+    exec {_dls_fd}<&-
+}
+REPLY=$_dls_frame
+return 0

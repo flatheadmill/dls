@@ -8,9 +8,10 @@
 #     execute       <name> <cwd> <out-fifo> <err-fifo> <args...>
 #     execute-stdin <name> <cwd> <out-fifo> <err-fifo> <in-fifo> <args...>
 #     control       <name> <cwd> <out-fifo> <err-fifo> <args...>
+#     token-put     -      <cwd> <out-fifo> <err-fifo> <in-fifo>
 #
-# where kind is `execute`, `execute-stdin`, or `control`. The response is the exit status,
-# written to the connection as `exit <code>` when the command finishes.
+# The response is the exit status, written to the connection as `exit <code>`
+# when the request finishes.
 # The background wrapper and maskers retain the connection fd, but the
 # command tree does not. The client's end reaches end of file when that
 # shell island is done and both output streams have drained. A detached
@@ -22,7 +23,8 @@
 # Output never crosses the socket. The command's standard out and standard
 # error stream through the fifos, masked line by line against the decoded
 # values admitted to that request. An execute-stdin request adds a fifo flowing
-# from the client to command fd 0; ordinary requests use /dev/null. The server
+# from the client to command fd 0; token-put uses the same client-created input
+# shape for one opaque record. Ordinary requests use /dev/null. The server
 # touches both output fifos exactly once per request, error paths included, so
 # client readers always terminate.
 
@@ -155,7 +157,7 @@ function _dls_run_execute {
                     # `$request_dir` is its private scratch. The global caches
                     # belong to the server, not command code; sibling masker
                     # forks retain their copies of the mask list.
-                    unset _dls_cache _dls_masks
+                    unset _dls_cache _dls_masks _dls_tokens
                     typeset request_dir=$_dls_request
                     ":dls:${name}" "$@"
                 )
@@ -361,6 +363,7 @@ function _dls_status_report {
     fi
     text+="  commands: ${${(j:, :)reply}:-(none)}"$'\n'
     text+="  cached: ${${(j:, :)${(ok)_dls_cache}}:-(none)}"$'\n'
+    text+="  tokens: ${#_dls_tokens} records"$'\n'
     text+="  sources: ${#_dls_checksums} files loaded"$'\n'
     for file in "${(@)changed}"; do
         text+="  changed since load: $file"$'\n'
@@ -424,6 +427,24 @@ function _dls_handle {
     (control)
         _dls_handle_control $conn "$name" "$out" "$err" "${(@)args}"
         ;;
+    (token-put)
+        if [[ $name != - ]] || (( ${#args} != 1 )); then
+            _dls_reply $conn "$out" "$err" 64 '' \
+                $'dls: protocol error: token-put requires one input FIFO\n'
+            return
+        fi
+        typeset REPLY
+        integer code
+        _dls_token_accept "$args[1]"
+        code=$?
+        if (( code )); then
+            _dls_reply $conn "$out" "$err" $code '' "dls: $REPLY"$'\n'
+        else
+            # Acknowledgement follows atomic publication and the parent map
+            # update. A caller lost after commit does not roll the record back.
+            _dls_reply $conn "$out" "$err" 0 $'dls: token record stored\n' ''
+        fi
+        ;;
     (*)
         _dls_reply $conn "$out" "$err" 64 '' \
             $'dls: protocol error: unknown request kind\n'
@@ -443,6 +464,7 @@ function :execute:serve {
 
     typeset -g _dls_source=${dls[source]:-op} _dls_recipient=''
     typeset -gA _dls_cache=()
+    typeset -gA _dls_tokens=()
     typeset -ga _dls_masks=()
     typeset -gi _dls_running=1 _dls_started=$EPOCHSECONDS _dls_listen=-1
 
@@ -474,6 +496,11 @@ function :execute:serve {
         _dls_snapshot_load "$_dls_snapshot_path" "$_dls_recipient" ||
             abend 'fatal: %s' "$REPLY"
     fi
+
+    _dls_tokens_config || abend 'fatal: %s' "$REPLY"
+    typeset -g _dls_tokens_path=$reply[1] _dls_tokens_pin=$reply[2]
+    _dls_tokens_load "$_dls_tokens_path" "$_dls_tokens_pin" ||
+        abend 'fatal: %s' "$REPLY"
 
     # The files root, where each request gets a private directory and file
     # secrets materialize. Mode 0300 is the whole of the file-side mechanism:

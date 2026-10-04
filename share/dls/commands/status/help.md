@@ -12,5 +12,9 @@ In snapshot mode it also reports the pinned recipient and says that the cached
 references were loaded at startup. It describes this process, without inspecting
 or decrypting a snapshot that may have been replaced since startup. A successful
 sync does not change the running server's values.
+
+The token count describes opaque records held by this running parent, including
+successful puts during its lifetime. Status does not print those records or
+inspect a replacement token bundle on disk.
 ## OPTIONS
 > options
