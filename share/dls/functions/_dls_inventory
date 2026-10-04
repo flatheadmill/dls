@@ -1,0 +1,17 @@
+emulate -L zsh
+
+# Sources have loaded and configuration keys have been checked. Inventory is
+# the union of both declaration tables, independent of command or delivery shape.
+typeset _dls_table _dls_entry _dls_ref
+typeset -A _dls_declared=()
+for _dls_table in dls_secrets dls_files; do
+    for _dls_entry in ${(ok)${(P)_dls_table}}; do
+        _dls_ref=${${(P)_dls_table}[$_dls_entry]}
+        if ! dls_ref "$_dls_ref"; then
+            REPLY="invalid reference in ${_dls_table}[${_dls_entry}]: ${(qqq)_dls_ref}"
+            return 1
+        fi
+        _dls_declared[$REPLY]=1
+    done
+done
+reply=( "${(@ok)_dls_declared}" )

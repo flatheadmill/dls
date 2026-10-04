@@ -39,138 +39,6 @@ function :args:serve {
     eval "$(args -C -bx h,help -- "$@")"
 }
 
-# INVARIANT No hot reload. Every line of command code is loaded here,
-# once, at startup, and its checksum recorded for `dls status` to report
-# drift. A command written or edited after the server starts is inert until
-# a human restarts the server; the restart is the approval gate through
-# which agent authored code gains access to secrets. Do not add
-# convenience reloading; it deletes the security property.
-function _dls_load_sources {
-    typeset -gA _dls_checksums=()
-    typeset key src
-    for key in ${(k)zshctl}; do
-        [[ $key = :execute:* ]] || continue
-        src=$zshctl[$key]
-        [[ ${src[1]} = / ]] || continue
-        source $src || abend 'fatal: unable to source `%s`' $src
-        # This is the line that makes the no-reload invariant above real.
-        # Having sourced the command file once, we overwrite its zshctl entry
-        # (the source path) with ':', a no-op, so zshctl's delegate never
-        # lazily re-sources it on a later call. Drop this and every DLS command
-        # re-reads the file from disk, and agent-edited command code goes live
-        # without a restart — the approval gate, gone.
-        zshctl[$key]=':'
-        _dls_checksums[$src]="$(cksum < $src)"
-    done
-    # The function libraries beside the command trees are code too.
-    typeset -aU roots=( ${(@)${(k)_dls_checksums}%%/commands/*} )
-    typeset file
-    for file in ${^roots}/functions/*(N.); do
-        _dls_checksums[$file]="$(cksum < $file)"
-    done
-}
-
-# Close the library half of the restart gate. zshctl registers files in every
-# extension `functions` directory as autoload stubs, and extension directories
-# lead fpath. Left alone, the parent retains those unresolved stubs while each
-# forked request reads the current file from disk. A command file can also
-# replace a framework helper with a direct function definition, which +X will
-# preserve rather than overwrite.
-#
-# Reclaim the reserved library names first: remove any stub or direct
-# definition, register the exact install-tree file with -R so fpath cannot
-# redirect it, resolve it now, and assert the origin. Every function shipped in
-# dls's own library is reserved, along with the zshctl library functions used by
-# the server path. Then resolve every remaining stub — extension helpers — so
-# the body admitted at startup is the body requests keep using.
-#
-# What the reclaim is for, since a reader will otherwise assume the wrong
-# threat. It is not defending framework names against approved code: a command
-# file runs arbitrary top level code in this parent when it is sourced, so
-# approved code is trusted, entirely, and the help says as much. The reclaim
-# beats fpath precedence for the accident. An extension that innocently ships a
-# `functions/pocket` would otherwise win stub resolution, because extension
-# directories lead fpath — a name collision rather than an attack, which is
-# exactly the shape of trouble this project expects. The reclaim makes a
-# collision lose to the framework loudly instead of winning silently.
-#
-# This closes names registered before the gate. Approved code can still add an
-# fpath directory and register or source more code at runtime; zshctl's `block`
-# helper does exactly that for its block.d functions. That is execution already
-# authorized by the loaded body, not something a generic autoload sweep can
-# prevent.
-function _dls_bind_functions {
-    typeset _dls_own_dir=${functions_source[:execute:serve]:A:h:h:h}/functions
-    typeset _dls_zshctl_dir=${functions_source[delegate]:A:h:h}/share/zshctl/functions
-    typeset -A _dls_reserved=()
-    typeset _dls_file _dls_name
-
-    [[ -d $_dls_own_dir ]] ||
-        abend 'fatal: unable to find dls function library at %s' $_dls_own_dir
-    [[ -d $_dls_zshctl_dir ]] ||
-        abend 'fatal: unable to find zshctl function library at %s' $_dls_zshctl_dir
-
-    for _dls_file in $_dls_own_dir/*(N.); do
-        _dls_reserved[${_dls_file:t}]=$_dls_file
-    done
-    # Direct server dependencies plus the transitive helpers they call.
-    for _dls_name in abend heredoc pocket slurp tactac warn; do
-        _dls_reserved[$_dls_name]=$_dls_zshctl_dir/$_dls_name
-    done
-
-    for _dls_name in ${(ok)_dls_reserved}; do
-        _dls_file=$_dls_reserved[$_dls_name]
-        [[ -f $_dls_file ]] ||
-            abend 'fatal: reserved function %s is missing from %s' \
-                $_dls_name $_dls_file
-        if (( ${+functions[$_dls_name]} )); then
-            unfunction $_dls_name ||
-                abend 'fatal: unable to reclaim reserved function %s' $_dls_name
-        fi
-        autoload -zUR $_dls_file ||
-            abend 'fatal: unable to pin reserved function %s to %s' \
-                $_dls_name $_dls_file
-        autoload -zU +X $_dls_name ||
-            abend 'fatal: unable to load reserved function %s from %s' \
-                $_dls_name $_dls_file
-        [[ ${functions_source[$_dls_name]:A} = ${_dls_file:A} ]] ||
-            abend 'fatal: reserved function %s loaded from %s instead of %s' \
-                $_dls_name ${functions_source[$_dls_name]:-unknown} $_dls_file
-    done
-
-    # +X loads without executing. Do not hide its diagnostics: on a parse or
-    # lookup failure zsh leaves the name as a stub, and startup must fail rather
-    # than silently restoring per-request disk reads.
-    autoload -zU +X -m '*'
-
-    # A surviving stub is not evidence that a load failed, it is the whole
-    # invariant: a stub body is the only mechanism by which a request can read a
-    # function from disk, so if none remain, none can. That is why the aggregate
-    # exit status of the sweep above is not the oracle — it reports nonzero here
-    # even when every name resolved — while this postcondition is exact.
-    #
-    # Match the flag prefix rather than one literal. zshctl registers with -zU,
-    # giving `builtin autoload -XU`, but a bare `autoload name` gives `builtin
-    # autoload -X` with no U, and an exact comparison walks straight past it.
-    # Insurance rather than a live bug, and it costs nothing to be right for
-    # every registration flavour.
-    typeset -a _dls_stubs=() _dls_stub_files=()
-    typeset -a _dls_found
-    for _dls_name in ${(ok)functions}; do
-        [[ ${functions[$_dls_name]} = 'builtin autoload -X'* ]] || continue
-        _dls_stubs+=( $_dls_name )
-        # Name the file, not just the function. The operator who hits this is
-        # usually mid-edit on a helper and would otherwise walk fpath by hand.
-        _dls_found=( ${^fpath}/$_dls_name(N.) )
-        _dls_stub_files+=( ${_dls_found[1]:-$_dls_name (not found on fpath)} )
-    done
-    if (( ${#_dls_stubs} )); then
-        abend 'fatal: unable to bind all function libraries at startup; unresolved: %s' \
-            "${(j:, :)_dls_stub_files}"
-    fi
-    return 0
-}
-
 # The loaded commands, for `dls status` and the startup banner. Read the
 # expansion inside out: (@k)functions is every defined function name;
 # (M)...:#:dls:* keeps only the ones matching :dls:* — with the M flag
@@ -325,7 +193,7 @@ function _dls_resolve_secrets {
     typeset _dls_failure=''
     typeset -A _dls_references=() _dls_shapes=() _dls_materialized=()
     typeset -aU _dls_attempted_accounts=()
-    integer _dls_failed=0
+    integer _dls_failed=0 _dls_fetch_status=0
 
     # Parse on the rightmost colon: command names may themselves contain
     # colons, while secret keys may not.
@@ -361,10 +229,10 @@ function _dls_resolve_secrets {
     {
         for _dls_key in ${(ok)_dls_references}; do
             _dls_reference=${_dls_references[${_dls_key}]}
-            (( ${+_dls_cache[${_dls_reference}]} )) && continue
-            _dls_account=${_dls_reference%%/*}
-            _dls_attempted_accounts+=( $_dls_account )
-            if ! dls_fetch "$_dls_reference"; then
+            if _dls_cache_require "$_dls_reference"; then
+                continue
+            else
+                _dls_fetch_status=$?
                 typeset _dls_table=dls_secrets
                 [[ ${_dls_shapes[${_dls_key}]} = file ]] && _dls_table=dls_files
                 _dls_failure="dls: unable to resolve secret reference $_dls_reference for ${_dls_table}[${_dls_name}:${_dls_key}]: ${${REPLY:-unknown error}#dls: }"
@@ -378,6 +246,7 @@ function _dls_resolve_secrets {
         done
     }
     if (( _dls_failed )); then
+        (( _dls_fetch_status != 70 )) || abend 'fatal: %s' "$_dls_failure"
         REPLY=$_dls_failure
         return 69
     fi
@@ -469,75 +338,6 @@ function _dls_handle_execute {
     _dls_run_execute $conn "$name" "$cwd" "$out" "$err" "$in" "$@"
 }
 
-function _dls_control_fetch {
-    integer conn=$1
-    typeset out=$2 err=$3
-    shift 3
-    if (( ! $# )); then
-        _dls_reply $conn "$out" "$err" 64 '' \
-            $'dls: missing argument: fetch requires at least one secret reference\n'
-        return
-    fi
-    typeset REPLY reference account outtext='' errtext=''
-    typeset -aU attempted_accounts=()
-    integer failures=0
-    {
-        for reference in "$@"; do
-            if ! dls_ref $reference; then
-                errtext+="dls: invalid secret reference: $reference"$'\n'
-                (( failures++ ))
-                continue
-            fi
-            reference=$REPLY
-            if (( ${+_dls_cache[$reference]} )); then
-                outtext+="cached: $reference"$'\n'
-                continue
-            fi
-            account=${reference%%/*}
-            attempted_accounts+=( $account )
-            if dls_fetch $reference; then
-                outtext+="fetched: $reference"$'\n'
-            else
-                errtext+="$REPLY"$'\n'
-                (( failures++ ))
-            fi
-        done
-    } always {
-        # Each account contacted by the batch closes once.
-        for account in "${(@)attempted_accounts}"; do
-            dls_signout $account
-        done
-    }
-    _dls_reply $conn "$out" "$err" $(( failures != 0 )) "$outtext" "$errtext"
-}
-
-function _dls_control_clear {
-    integer conn=$1
-    typeset out=$2 err=$3
-    shift 3
-    typeset REPLY reference errtext=''
-    integer cleared=0 failures=0
-    if (( $# )); then
-        for reference in "$@"; do
-            if ! dls_ref $reference; then
-                errtext+="dls: invalid secret reference: $reference"$'\n'
-                (( failures++ ))
-                continue
-            fi
-            reference=$REPLY
-            if (( ${+_dls_cache[$reference]} )); then
-                unset "_dls_cache[$reference]"
-                (( cleared++ ))
-            fi
-        done
-    else
-        cleared=${#_dls_cache}
-        _dls_cache=()
-    fi
-    _dls_reply $conn "$out" "$err" $(( failures != 0 )) \
-        "dls: cleared $cleared; ${#_dls_cache} cached"$'\n' "$errtext"
-}
-
 function _dls_status_report {
     typeset text ts file
     typeset -a changed=() missing=() reply
@@ -554,6 +354,11 @@ function _dls_status_report {
     text+="  socket: $_dls_socket_path"$'\n'
     text+="  pid: $sysparams[pid]"$'\n'
     text+="  started: $ts"$'\n'
+    text+="  source: $_dls_source"$'\n'
+    if [[ $_dls_source = snapshot ]]; then
+        text+="  recipient: $_dls_recipient"$'\n'
+        text+="  snapshot: cached references loaded at startup"$'\n'
+    fi
     text+="  commands: ${${(j:, :)reply}:-(none)}"$'\n'
     text+="  cached: ${${(j:, :)${(ok)_dls_cache}}:-(none)}"$'\n'
     text+="  sources: ${#_dls_checksums} files loaded"$'\n'
@@ -578,12 +383,6 @@ function _dls_handle_control {
         typeset REPLY
         _dls_status_report
         _dls_reply $conn "$out" "$err" 0 $REPLY ''
-        ;;
-    (fetch)
-        _dls_control_fetch $conn "$out" "$err" "$@"
-        ;;
-    (clear)
-        _dls_control_clear $conn "$out" "$err" "$@"
         ;;
     (stop)
         _dls_running=0
@@ -640,36 +439,9 @@ function :execute:serve {
         print -r -u 2 -- 'dls: warning: unable to disable core dumps'
     umask 077
 
-    _dls_load_sources
+    _dls_prepare
 
-    # Configuration is admitted at the same restart gate as command code.
-    # Reject a malformed secrets table before the server binds its socket;
-    # surfacing this later as a command failure would blame the caller for an
-    # operator configuration error.
-    typeset _dls_entry _dls_command _dls_key _dls_table
-    for _dls_table in dls_secrets dls_files; do
-        for _dls_entry in ${(ok)${(P)_dls_table}}; do
-            if [[ $_dls_entry != *:* ]]; then
-                abend 'fatal: invalid %s key %s: expected <command>:<secret-key>' \
-                    $_dls_table ${(qqq)_dls_entry}
-            fi
-            _dls_command=${_dls_entry%:*}
-            _dls_key=${_dls_entry##*:}
-            if [[ -z $_dls_command || -z $_dls_key ]]; then
-                abend 'fatal: invalid %s key %s: command and secret key must be nonempty' \
-                    $_dls_table ${(qqq)_dls_entry}
-            fi
-            # One key cannot be both shapes. Both tables assign to the same
-            # `$secret` entry, so whichever ran second would silently win.
-            if [[ $_dls_table = dls_files ]] && (( ${+dls_secrets[$_dls_entry]} )); then
-                abend 'fatal: %s is declared in both dls_secrets and dls_files' \
-                    ${(qqq)_dls_entry}
-            fi
-        done
-    done
-
-    _dls_bind_functions
-
+    typeset -g _dls_source=${dls[source]:-op} _dls_recipient=''
     typeset -gA _dls_cache=()
     typeset -ga _dls_masks=()
     typeset -gi _dls_running=1 _dls_started=$EPOCHSECONDS _dls_listen=-1
@@ -691,6 +463,16 @@ function :execute:serve {
         fi
         # Stale socket from an unclean exit; nobody is listening.
         rm -f $_dls_socket_path
+    fi
+
+    if [[ $_dls_source = snapshot ]]; then
+        _dls_snapshot_config || abend 'fatal: %s' "$REPLY"
+        typeset _dls_snapshot_path=$reply[1]
+        _dls_recipient=$reply[2]
+        _dls_inventory || abend 'fatal: %s' "$REPLY"
+        typeset -a _dls_inventory=( "${(@)reply}" )
+        _dls_snapshot_load "$_dls_snapshot_path" "$_dls_recipient" ||
+            abend 'fatal: %s' "$REPLY"
     fi
 
     # The files root, where each request gets a private directory and file

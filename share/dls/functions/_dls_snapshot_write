@@ -1,0 +1,10 @@
+emulate -L zsh -o pipefail
+
+typeset _dls_ref _dls_key64
+builtin print -r -- 'DLS-SNAPSHOT 1' || return 1
+for _dls_ref in "${(@ok)_dls_cache}"; do
+    _dls_key64=$(builtin print -rn -- "$_dls_ref" |
+        command base64 | command tr -d '\n') || return 1
+    builtin print -r -- "$_dls_key64"$'\t'"${_dls_cache[$_dls_ref]}" || return 1
+done
+return 0

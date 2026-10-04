@@ -1,0 +1,18 @@
+emulate -L zsh
+zmodload zsh/stat || return 1
+
+typeset _dls_dir=${1:h}
+typeset -A _dls_stat
+if [[ ${2:-} = create && ! -d $_dls_dir ]]; then
+    command mkdir -p -m 700 -- "$_dls_dir" || {
+        REPLY="unable to create snapshot directory: $_dls_dir"
+        return 1
+    }
+fi
+# Do not chmod an existing directory: a mistaken override must not change the
+# permissions of the operator's home or a shared temporary directory.
+if [[ ! -d $_dls_dir ]] || ! zstat -H _dls_stat -- "$_dls_dir" ||
+        (( (_dls_stat[mode] & 8#777) != 8#700 || _dls_stat[uid] != EUID )); then
+    REPLY="snapshot directory must be owned by you with mode 0700: $_dls_dir"
+    return 1
+fi
