@@ -240,6 +240,12 @@ If a key is lost, reset, or replaced, provision another key outside DLS, review 
 
 This is an attended workstation workflow. Background startup, daemonization, a restart command, and remote agent forwarding are outside this interface.
 
+## Application lifecycle commands
+
+DLS supplies the shared `authorize`, `import`, `forget`, and `revoke` parent commands. Each parent delegates to an installed application child using the ordinary zshctl command tree. An extension mounts only the children it implements, such as `commands/import/example/command.zsh` defining `:execute:import:example`; it does not supply its own `import` parent.
+
+These parents contain no provider behavior, token handling, or server control. A child's presence makes that operation available to callers, including assistants. An unsupported child remains absent. The extension owns any authorization, migration, local removal, or provider revocation it implements; forgetting local state and revoking a remote grant remain separate acts. Use `dls <parent> --help` to see installed children.
+
 ## Opaque token custody
 
 A foreground extension can submit one application-owned record to the running server with `dls_token_put <application> <identity>`. The helper reads the opaque record from standard input. For a record already held in a Zsh variable:
@@ -313,9 +319,10 @@ $ zsh test/all.zsh
 ok: admission (admission: PASS)
 ok: files (files: PASS)
 ok: gate (gate: PASS)
+ok: lifecycle (lifecycle: PASS)
 ok: multiple-secrets (multiple-secrets: PASS)
 ok: smoke (smoke: PASS)
 ok: snapshot (snapshot: PASS)
 ok: tokens (tokens: PASS)
-all: 7 suites passed
+all: 8 suites passed
 ```
