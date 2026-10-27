@@ -29,29 +29,35 @@ fi
 
 integer failed=0
 typeset -a failures=()
-typeset suite name output
+typeset suite name output mode
+integer runs=0
 
 for suite in "${(@)suites}"; do
-    name=${${suite:t}%.zsh}
-    output=$(ZSHCTL=${ZSHCTL:-} zsh $suite 2>&1)
-    if (( $? )); then
-        print -r -- "FAIL: $name"
-        print -r -- "$output"
-        print -r --
-        failures+=( $name )
-        (( failed++ ))
-    else
-        # `A` is doing the work here, not `f`. Splitting alone yields a scalar
-        # when a suite emits a single line, and `[-1]` then subscripts the
-        # string — reporting its last character as the summary. `A` forces an
-        # array expression whether or not the split produced more than one
-        # element, so the subscript always means what it looks like.
-        print -r -- "ok: $name (${${(@Af)output}[-1]:-no output})"
-    fi
+    typeset -a modes=( foreground daemon )
+    [[ ${suite:t} = (lifecycle|daemon).zsh ]] && modes=( foreground )
+    for mode in $modes; do
+        (( runs++ ))
+        name=${${suite:t}%.zsh}:$mode
+        output=$(DLS_TEST_MODE=$mode ZSHCTL=${ZSHCTL:-} zsh $suite 2>&1)
+        if (( $? )); then
+            print -r -- "FAIL: $name"
+            print -r -- "$output"
+            print -r --
+            failures+=( $name )
+            (( failed++ ))
+        else
+            # `A` is doing the work here, not `f`. Splitting alone yields a scalar
+            # when a suite emits a single line, and `[-1]` then subscripts the
+            # string — reporting its last character as the summary. `A` forces an
+            # array expression whether or not the split produced more than one
+            # element, so the subscript always means what it looks like.
+            print -r -- "ok: $name (${${(@Af)output}[-1]:-no output})"
+        fi
+    done
 done
 
 if (( failed )); then
-    print -r -- "all: ${failed} of ${#suites} suites failed: ${(j:, :)failures}"
+    print -r -- "all: ${failed} of ${runs} suite runs failed: ${(j:, :)failures}"
     exit 1
 fi
-print -r -- "all: ${#suites} suites passed"
+print -r -- "all: ${runs} suite runs passed"

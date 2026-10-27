@@ -188,7 +188,7 @@ dls: a running server keeps its loaded values until stopped and started again
 
 With no arguments, sync reads every distinct reference declared in either `dls_secrets` or `dls_files`. Each contacted account is signed out after the attempted batch. Full sync encrypts with the public key and needs no Nitrokey operation. A failed read, validation, encryption, or replacement leaves the previous ciphertext in place.
 
-Start the reviewed server in the foreground, outside the agent's sandbox:
+Start the reviewed server in a trusted terminal, outside the agent's sandbox:
 
 ```console
 $ dls serve
@@ -196,6 +196,14 @@ dls: decrypting synchronized secrets; touch the Nitrokey
 dls: decryption complete
 dls: serving on /Users/example/.local/state/dls/dls.socket
 ```
+
+After startup approval and decryption, `dls serve` leaves the loaded broker running in the background. It returns the prompt only after the child answers a control ping. Closing the terminal does not stop it. Use `dls serve --foreground` to keep the accept loop attached for diagnosis or external supervision. Daemon mode requires `zsh/clone` and `logger`, checked before the ceremony; foreground mode does not. There is no automatic startup or restart.
+
+`dls stop` returns success after the owner releases its socket, so an immediate restart can bind safely. TERM and HUP also request orderly shutdown after any synchronous token update or admission finishes. Already admitted commands continue independently. A crash can leave a stale socket, which the next attended startup checks and removes. There is no shutdown flush of a failed token publication.
+
+Daemon faults produce fixed framework messages in the system log under tag `dls`, priority `user.err`; request details, provider diagnostics, and command output are excluded. Foreground diagnostics stay on stderr, and command stdout, stderr, and status return to the client in either mode. Live-provider authorization may occur during a later request: a detached server cannot satisfy a terminal-only prompt.
+
+The Zsh handoff creates a new session on supported systems, but `clone` warns and continues on `setsid` failure. Readiness proves a responding accept loop. If startup is interrupted or receives an invalid response, it requests stop through a separate connection. A defective child that never accepts, or dies without removing its socket, can leave startup cancellation waiting and require manual process recovery; there is no readiness deadline or watchdog.
 
 GnuPG obtains the PIN through pinentry and the token enforces touch when its decryption interaction flag is enabled. DLS does not ask for a PIN on its command line or in a message. One complete decrypt loads the existing canonical cache before the socket binds. A wrong key, failed integrity check, malformed snapshot, or missing or extra declared reference refuses startup. No partial server or live fallback is started. Ordinary operations then need neither 1Password nor the token. Value/file shape checks still occur when an operation is admitted.
 
@@ -232,7 +240,7 @@ Completion loads installed executable declarations. DLS does not contact the pro
 
 `dls status` reports the running process's socket, PID, startup time, selected source, loaded operation names, cached references, and source drift. In snapshot mode it also names the pinned recipient and says the references were loaded at startup. It never reports values or inspects a replacement snapshot to describe what this process holds. Source drift is a reminder to review before the next start. Each operation's client half provides its own `--help`.
 
-Sync changes ciphertext; serve reads it once at startup; a running server keeps its loaded values. After synchronization, stop and start the foreground server to load the replacement. `fetch` and `clear` have been removed in both modes. Live-mode rotation also requires a new server start; ordinary live requests can still populate previously cold entries.
+Sync changes ciphertext; serve reads it once at startup; a running server keeps its loaded values. After synchronization, stop and start the server to load the replacement. `fetch` and `clear` have been removed in both modes. Live-mode rotation also requires a new server start; ordinary live requests can still populate previously cold entries.
 
 Stop ends the parent cache and admission of new requests while allowing existing operations to finish. A following start cleans the shared request-files root, so old operations cannot rely on their files surviving an immediate stop/start.
 
@@ -312,17 +320,12 @@ The optional [`gh` example](examples/gh) is not installed with DLS. Most users s
 
 ## Tests
 
-The test suite uses disposable homes, software OpenPGP keys, and a fake `op`; it cannot spend a real provider authorization or require a token. GnuPG and local Unix sockets must be available:
+The test suite uses disposable homes, software OpenPGP keys, and a fake `op`; it cannot spend a real provider authorization or require a token. GnuPG, `lsof`, and local Unix sockets must be available. Server suites run in both foreground and daemon modes; the lifecycle fixture also checks terminal detachment, descriptors, startup cancellation, and owner faults:
 
 ```console
 $ zsh test/all.zsh
-ok: admission (admission: PASS)
-ok: files (files: PASS)
-ok: gate (gate: PASS)
-ok: lifecycle (lifecycle: PASS)
-ok: multiple-secrets (multiple-secrets: PASS)
-ok: smoke (smoke: PASS)
-ok: snapshot (snapshot: PASS)
-ok: tokens (tokens: PASS)
-all: 8 suites passed
+ok: admission:foreground (admission: PASS)
+ok: admission:daemon (admission: PASS)
+...
+all: 16 suite runs passed
 ```

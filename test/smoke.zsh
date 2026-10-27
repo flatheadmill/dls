@@ -10,6 +10,8 @@
 # a real zshctl extension and cannot see the operator's configuration.
 
 emulate -L zsh
+typeset -a serve_flags=( --foreground )
+[[ ${DLS_TEST_MODE:-foreground} = daemon ]] && serve_flags=()
 zmodload zsh/datetime
 zmodload zsh/zpty
 
@@ -191,7 +193,7 @@ dls_secrets[badkey]=Test/Private/item/field
 EOF
 typeset malformed_out
 malformed_out=$(HOME=$malformed_home DLS_SOCKET=$malformed_socket \
-    $zshctl $root/bin/dls serve 2>&1)
+    $zshctl $root/bin/dls serve "${(@)serve_flags}" 2>&1)
 integer malformed_code=$?
 assert_code 'malformed secrets key refuses startup' 1 $malformed_code
 assert 'malformed secrets key is named' 'badkey' "$malformed_out"
@@ -238,7 +240,7 @@ print -r -- "print -r -- 'unterminated" > $unbindable_ext/functions/test_helper
 # that never returns, and the suite would hang instead of reporting — a test
 # that hangs on regression is barely better than one that passes on it.
 HOME=$unbindable_home DLS_SOCKET=$unbindable_socket \
-    $zshctl $root/bin/dls serve > $home/unbindable.log 2>&1 &
+    $zshctl $root/bin/dls serve "${(@)serve_flags}" > $home/unbindable.log 2>&1 &
 integer unbindable_server=$!
 integer unbindable_started=0
 for i in {1..100}; do
@@ -266,7 +268,7 @@ assert 'unresolvable helper is named' 'test_helper' "$unbindable_out"
 
 integer server=0 stdin_producer=0
 {
-    dls serve > $home/serve.log 2>&1 &
+    dls serve "${(@)serve_flags}" > $home/serve.log 2>&1 &
     server=$!
 
     integer i
@@ -482,7 +484,7 @@ integer server=0 stdin_producer=0
 
     out=$(dls stop 2> $home/err)
     assert_code 'stop exits zero' 0 $?
-    assert 'stop reports' 'stopping' "$out"
+    assert 'stop reports' 'stopped' "$out"
 
     for i in {1..100}; do
         kill -0 $server 2>/dev/null || break
@@ -509,7 +511,7 @@ integer server=0 stdin_producer=0
     for signal in INT TERM; do
         signal_name=${(L)signal}
         export DLS_SOCKET=$home/dls-$signal_name.socket
-        dls serve > $home/serve-$signal_name.log 2>&1 &
+        dls serve "${(@)serve_flags}" > $home/serve-$signal_name.log 2>&1 &
         launcher=$!
         server=$launcher
 

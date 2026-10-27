@@ -10,6 +10,7 @@ typeset runner=${ZSHCTL:-$(command -v zshctl)}
 python3 - "$root" "$runner" <<'PY'
 import base64
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -19,6 +20,8 @@ import tempfile
 import time
 
 root, runner = sys.argv[1:]
+daemon = os.environ.get('DLS_TEST_MODE') == 'daemon'
+serve_flags = [] if daemon else ['--foreground']
 gpg, real_mv = shutil.which('gpg'), shutil.which('mv')
 assert gpg and real_mv
 with tempfile.TemporaryDirectory(prefix='dls.admission.') as temporary:
@@ -51,6 +54,10 @@ esac
     (tools / 'gpg').write_text('''#!/bin/zsh -f
 if [[ " $* " = *' --encrypt '* ]]; then
     [[ ! -e $DLS_TEST_FIXTURE/fail-encrypt ]] || exit 1
+    if [[ -e $DLS_TEST_FIXTURE/hold-encrypt ]]; then
+        : > $DLS_TEST_FIXTURE/encrypt-ready
+        while [[ ! -e $DLS_TEST_FIXTURE/release-encrypt ]]; do sleep 0.02; done
+    fi
 fi
 exec $DLS_TEST_GPG "$@"
 ''')
@@ -198,12 +205,16 @@ function :dls:use {
     def start():
         global server, log_file
         log_file = (fixture / 'server.log').open('wb')
-        server = subprocess.Popen([*command, 'serve'], env=env, stdout=log_file,
+        server = subprocess.Popen([*command, 'serve', *serve_flags], env=env, stdout=log_file,
                                   stderr=subprocess.STDOUT, start_new_session=True)
         deadline = time.monotonic() + 8
         while not address.exists() and server.poll() is None and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert address.exists() and server.poll() is None, (fixture / 'server.log').read_text()
+        assert address.exists(), (fixture / 'server.log').read_text()
+        if daemon:
+            assert server.wait(timeout=5) == 0, (fixture / 'server.log').read_text()
+        else:
+            assert server.poll() is None, (fixture / 'server.log').read_text()
         run('status')
 
     def stop():
@@ -368,8 +379,44 @@ function :dls:use {
         assert len(renewals()) == count + 1, 'runtime state survived restart'
         assert stored()[b'fixture', b'one'] == (fixture / 'expected-one').read_bytes()
         stop()
+        # A signal during refresh publication waits for the replacement and
+        # admitted request; a restart must load the provider's new record.
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            start()
+            owner = int(re.search(rb'  pid: (\d+)', run('status').stdout)[1])
+            for name in ('release-encrypt', 'encrypt-ready'):
+                (fixture / name).unlink(missing_ok=True)
+            (fixture / 'hold-encrypt').touch()
+            before = token_path.read_bytes()
+            pending = subprocess.Popen([*command, 'use', 'run', 'one', 'normal'], env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            deadline = time.monotonic() + 8
+            while not (fixture / 'encrypt-ready').exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert (fixture / 'encrypt-ready').exists()
+            os.kill(owner, sig)
+            time.sleep(0.1)
+            assert address.exists() and pending.poll() is None
+            assert token_path.read_bytes() == before
+            run('serve', *serve_flags, code=69)
+            (fixture / 'release-encrypt').touch()
+            output, error = pending.communicate(timeout=10)
+            assert pending.returncode == 0, error
+            deadline = time.monotonic() + 5
+            while address.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert not address.exists()
+            assert server.wait(timeout=5) == 0
+            server = None
+            log_file.close()
+            (fixture / 'hold-encrypt').unlink()
+            assert stored()[b'fixture', b'one'] == (fixture / 'expected-one').read_bytes()
+        start()
+        use()
+        stop()
         print('admission: PASS')
     finally:
+        (fixture / 'release-encrypt').touch()
         if server is not None:
             try:
                 subprocess.run([*command, 'stop'], env=env, capture_output=True, timeout=7)

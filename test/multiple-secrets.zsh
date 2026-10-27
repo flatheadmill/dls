@@ -5,6 +5,8 @@
 # batching, warm-call signout suppression, masking, and non-export.
 
 emulate -L zsh
+typeset -a serve_flags=( --foreground )
+[[ ${DLS_TEST_MODE:-foreground} = daemon ]] && serve_flags=()
 
 typeset root=${ZSH_ARGZERO:A:h:h}
 typeset zshctl=${ZSHCTL:-$(command -v zshctl)}
@@ -155,7 +157,7 @@ function dls {
 
 integer server=0
 {
-    dls serve > $home/serve.log 2>&1 &
+    dls serve "${(@)serve_flags}" > $home/serve.log 2>&1 &
     server=$!
 
     integer i

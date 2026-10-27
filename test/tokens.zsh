@@ -10,6 +10,7 @@ typeset runner=${ZSHCTL:-$(command -v zshctl)}
 python3 - "$root" "$runner" <<'PY'
 import base64
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -22,6 +23,8 @@ import threading
 import time
 
 root, runner = sys.argv[1:]
+daemon = os.environ.get('DLS_TEST_MODE') == 'daemon'
+serve_flags = [] if daemon else ['--foreground']
 gpg, real_mv = shutil.which('gpg'), shutil.which('mv')
 assert gpg and real_mv, 'gpg and mv are required'
 
@@ -114,7 +117,7 @@ function :dls:probe {
     def start(refuse=False):
         global server, log_file
         log_file = (fixture / 'server.log').open('wb')
-        server = subprocess.Popen([*command, 'serve'], env=env, stdout=log_file,
+        server = subprocess.Popen([*command, 'serve', *serve_flags], env=env, stdout=log_file,
                                   stderr=subprocess.STDOUT, start_new_session=True)
         try:
             wait_for(lambda: address.exists() or server.poll() is not None)
@@ -126,7 +129,10 @@ function :dls:probe {
             server = None
             log_file.close()
         else:
-            assert server.poll() is None, (fixture / 'server.log').read_text()
+            if daemon:
+                assert server.wait(timeout=5) == 0, (fixture / 'server.log').read_text()
+            else:
+                assert server.poll() is None, (fixture / 'server.log').read_text()
             run('status')
 
     def stop():
@@ -316,6 +322,38 @@ os.kill(os.getpid(), signal.SIGKILL)
         stored(expected)
         assert '--decrypt' not in gpg_log.read_text()
         stop()
+
+        # Signals cannot release ownership while a synchronous put is still
+        # publishing. The old bundle stays readable until the atomic rename.
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            start()
+            owner = int(re.search(rb'  pid: (\d+)', run('status').stdout)[1])
+            for name in ('release-encrypt', 'encrypt-ready'):
+                (fixture / name).unlink(missing_ok=True)
+            (fixture / 'hold-encrypt').touch()
+            before = token_path.read_bytes()
+            pending = subprocess.Popen([*command, 'store', 'fixture', 'one'], env=env,
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE)
+            pending.stdin.write(b'after-signal')
+            pending.stdin.close()
+            pending.stdin = None
+            wait_for(lambda: (fixture / 'encrypt-ready').exists())
+            os.kill(owner, sig)
+            time.sleep(0.1)
+            assert address.exists() and pending.poll() is None
+            assert token_path.read_bytes() == before
+            run('serve', *serve_flags, code=69)
+            (fixture / 'release-encrypt').touch()
+            output, error = pending.communicate(timeout=10)
+            assert pending.returncode == 0, error
+            wait_for(lambda: not address.exists())
+            assert server.wait(timeout=5) == 0
+            server = None
+            log_file.close()
+            (fixture / 'hold-encrypt').unlink()
+            expected[b'fixture', b'one'] = b'after-signal'
+            stored(expected)
 
         # One bundle decrypt loads every identity; subsequent puts preserve it.
         gpg_log.write_text('')

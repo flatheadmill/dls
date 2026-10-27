@@ -1,9 +1,32 @@
 # desc -- run the dls secret broker
-Run the `dls` server in the foreground.
+Load the reviewed broker in the terminal, then leave it running in the background.
+# opt foreground
+Keep the accept loop in the terminal for diagnosis or external supervision.
 # opt help
 Display help for `dls serve`.
 # man
 ## DESCRIPTION
+Plain `dls serve` completes source loading and any provider or OpenPGP approval
+in the invoking terminal, clones the loaded interpreter, and returns only after
+the child answers a control ping. `--foreground` keeps the same startup and
+accept loop attached to the terminal. Daemon mode requires Zsh's `zsh/clone`
+module and the system `logger` utility; both are checked before decryption.
+It redirects its standard descriptors to `/dev/null` and leaves the launch
+working directory unchanged. Request output still reaches the client.
+
+The supported Zsh handoff creates a new session. The module warns and continues
+if `setsid` fails; readiness proves the accept loop, not every session property.
+An interrupted or invalid readiness exchange requests stop on a separate
+connection. Cancellation retries while the socket path exists: a full accept
+queue can temporarily refuse its connection. A child that never accepts or dies
+without cleanup can leave startup cancellation waiting; there is no watchdog
+or readiness deadline, and such a defect requires manual process recovery. DLS does not start or restart itself automatically.
+
+Daemon faults use fixed framework messages through `logger -t dls -p user.err`.
+Request arguments, provider errors, secret material, and command output never
+enter that log. Foreground faults go to stderr. An unexpected owner exit logs
+and cleans up; exits inside command workers do not stop the broker.
+
 `dls serve` listens on a Unix domain socket and brokers secrets to clients
 that are not allowed to read them. Clients invoke commands; the server runs each
 command in a background process tree with its configured secrets available to
@@ -55,7 +78,7 @@ Delivery shape remains a request concern.
 
 The snapshot parent holds the complete declared inventory for its lifetime.
 `dls sync` changes ciphertext, and this process never rereads it. Stop and start
-the foreground server to load replenished values. Live-mode rotation likewise
+the server to load replenished values. Live-mode rotation likewise
 uses a new server start; `fetch` and `clear` are no longer controls.
 
 All command and library code registered at startup is loaded before the socket
@@ -80,6 +103,12 @@ Commands receive `/dev/null` as standard input unless the client invokes
 `dls --stdin`. In that form the client's standard input is forwarded as a byte
 stream. It is not a pseudo-terminal: terminal modes, screen control, and window
 size are not brokered.
+
+A successful `dls stop` means the owner has unlinked the socket while still
+holding its listener, then closed it. TERM and HUP request orderly shutdown;
+foreground INT does too. Synchronous token publication or admission completes
+before release. There is no final token flush. SIGKILL can leave a stale socket,
+which the next attended startup removes after confirming no listener exists.
 
 Stopping the server leaves command process trees already in flight to finish.
 A newly started server cleans the shared files root before listening, so an old

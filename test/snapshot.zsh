@@ -3,6 +3,8 @@
 # Real OpenPGP, disposable software keys, and a fake provider. This proves the
 # data and process boundaries; a physical token ceremony is a separate check.
 emulate -L zsh -o pipefail
+typeset -a serve_flags=( --foreground )
+[[ ${DLS_TEST_MODE:-foreground} = daemon ]] && serve_flags=()
 zmodload zsh/stat
 
 typeset root=${ZSH_ARGZERO:A:h:h}
@@ -44,7 +46,7 @@ function configure {
 }
 
 function start_server {
-    run_dls serve > $fixture/serve.log 2>&1 &
+    run_dls serve "${(@)serve_flags}" > $fixture/serve.log 2>&1 &
     server=$!
     integer i
     for i in {1..100}; do
@@ -64,7 +66,7 @@ function stop_server {
 }
 
 function refuses_start {
-    run_dls serve > $fixture/refusal.log 2>&1 &
+    run_dls serve "${(@)serve_flags}" > $fixture/refusal.log 2>&1 &
     server=$!
     integer i
     for i in {1..100}; do

@@ -32,13 +32,14 @@ zmodload zsh/net/socket
 zmodload zsh/datetime
 zmodload zsh/system
 zmodload zsh/zselect
+zmodload zsh/stat
 
 function :help:serve {
     help=$(<${functions_source[:help:serve]:A:h}/help.md)
 }
 
 function :args:serve {
-    eval "$(args -C -bx h,help -- "$@")"
+    eval "$(args -C -b ,foreground -bx h,help -- "$@")"
 }
 
 # The loaded commands, for `dls status` and the startup banner. Read the
@@ -90,7 +91,7 @@ function _dls_reply {
     integer conn=$1 code=$4
     typeset out=$2 err=$3 outtext=$5 errtext=$6
     (
-        exec {_dls_listen}>&- 2>/dev/null
+        (( _dls_listen < 0 )) || { exec {_dls_listen}>&- } 2>/dev/null
         [[ -p $out ]] && print -rn -- $outtext > $out
         [[ -p $err ]] && print -rn -- $errtext > $err
         print -r -u $conn -- "exit $code" 2>/dev/null
@@ -394,8 +395,11 @@ function _dls_handle_control {
         _dls_reply $conn "$out" "$err" 0 $REPLY ''
         ;;
     (stop)
-        _dls_running=0
-        _dls_reply $conn "$out" "$err" 0 $'dls: server stopping\n' ''
+        if _dls_release; then
+            _dls_reply $conn "$out" "$err" 0 $'dls: server stopped\n' ''
+        else
+            _dls_reply $conn "$out" "$err" 74 '' $'dls: unable to release server socket\n'
+        fi
         ;;
     (*)
         _dls_reply $conn "$out" "$err" 64 '' \
@@ -410,7 +414,7 @@ function _dls_handle {
     read -r -t 5 -u $conn line || return 0
     typeset -a request=( "${(@Q)${(z)line}}" )
     if (( ${#request} < 5 )); then
-        print -r -u 2 -- 'dls: protocol error: malformed request dropped'
+        _dls_fault 'dls: protocol error: malformed request dropped'
         return 0
     fi
     typeset kind=$request[1] name=$request[2] cwd=$request[3]
@@ -458,6 +462,110 @@ function _dls_handle {
     esac
 }
 
+# Only fixed framework messages reach this function. Never forward a provider,
+# extension, request, path, or shell diagnostic to the system log.
+function _dls_fault {
+    if (( _dls_daemon )); then
+        "$_dls_logger" -t dls -p user.err -- "$1" </dev/null >/dev/null 2>&1 || :
+    else
+        print -r -u 2 -- "$1"
+    fi
+}
+
+# Unlink while still listening: closing first would let another startup replace
+# the stale socket before our unlink. The descriptor sentinel makes every later
+# cleanup harmless. Even a failed unlink closes admission, but never earns a
+# successful stop acknowledgement.
+function _dls_release {
+    (( sysparams[pid] == _dls_owner && _dls_listen >= 0 )) || return 0
+    _dls_running=0
+    integer failed=0
+    command rm -f -- "$_dls_socket_path" 2>/dev/null || failed=1
+    { exec {_dls_listen}>&- } 2>/dev/null
+    _dls_listen=-1
+    # A nested explicit exit can unwind a zshexit hook after its first helper
+    # returns in Zsh 5.9. Finish ownership changes before calling the logger.
+    if [[ ${1:-} = unexpected ]]; then
+        _dls_fault 'dls: server exited unexpectedly'
+    elif (( failed )); then
+        _dls_fault 'dls: unable to release server socket'
+    fi
+    return $failed
+}
+
+function _dls_owner_exit {
+    # Explicit exit in a detached subshell can invoke zshexit hooks too.
+    (( sysparams[pid] == _dls_owner && _dls_listen >= 0 )) || return 0
+    _dls_release unexpected
+}
+
+function _dls_summary {
+    typeset -a reply
+    _dls_commands
+    print -r -- "dls: serving on $_dls_socket_path"
+    print -r -- "dls: commands: ${${(j:, :)reply}:-(none)}"
+    print -r -- "dls: sources: ${#_dls_checksums} files loaded; code edits require a restart"
+}
+
+# A timeout and a select error both return 1. zselect.c emits a warning only
+# for errors; its warning machinery can overwrite ERRNO. Capture that warning
+# privately instead of guessing an errno or retry count. The short-lived shell
+# inherits the listener; it finishes before the owner can release ownership.
+function _dls_select {
+    # Check before opening the capture pipe: it could reuse a closed listener's
+    # number and make select watch the wrong descriptor. Some select platforms
+    # also ignore a closed descriptor above the process's highest open fd.
+    typeset -A descriptor
+    zstat -H descriptor -f "$1" 2>/dev/null || return 2
+    (( (descriptor[mode] & 8#170000) == 8#140000 )) || return 2
+    typeset diagnostic
+    if diagnostic=$(zselect -r -t 100 "$1" 2>&1); then
+        return 0
+    fi
+    [[ -z $diagnostic ]] && return 1
+    return 2
+}
+
+# The launcher owns this bounded parser, not the ordinary FIFO client. Read at
+# most eight bytes: one successful exit record and an EOF check. Partial reads
+# are normal.
+# One-second polls only observe interruption, never impose a readiness deadline.
+# Cancellation uses a separate connection and finishes even after interruption.
+function _dls_start_control {
+    typeset operation=$1 byte response='' expected=$'exit 0\n'
+    integer interruptible=$2 fd code
+    typeset -a request=( control "$operation" "$PWD" /dev/null /dev/null )
+    while ! zsocket "$_dls_socket_path" 2>/dev/null; do
+        # zsocket listens with backlog 1. On macOS a queued, abandoned ping can
+        # make the separate stop connection refuse until the child accepts it.
+        # Keep cancellation pending while the pathname exists; an owner that
+        # never accepts (or dies without cleanup) needs manual recovery.
+        (( ! interruptible )) && [[ -S $_dls_socket_path ]] || return 1
+        sleep 1
+    done
+    fd=$REPLY
+    {
+        print -r -u $fd -- "${(j: :)${(@q)request}}" 2>/dev/null || return 1
+        while (( ${#response} <= ${#expected} )); do
+            (( ! interruptible || _dls_running )) || return 1
+            sysread -i $fd -s 1 -t 1 byte 2>/dev/null
+            code=$?
+            (( code == 4 )) && continue
+            if (( code == 5 )); then
+                [[ $response = "$expected" ]] &&
+                    (( ! interruptible || _dls_running ))
+                return $?
+            fi
+            (( code == 0 )) || return 1
+            response+=$byte
+            [[ $expected = "$response"* ]] || return 1
+        done
+        return 1
+    } always {
+        { exec {fd}>&- } 2>/dev/null
+    }
+}
+
 function :execute:serve {
     (( ! $# )) || abend -c 64 'fatal: invalid argument: `dls serve` takes no arguments'
 
@@ -465,6 +573,15 @@ function :execute:serve {
     limit coredumpsize 0 2>/dev/null ||
         print -r -u 2 -- 'dls: warning: unable to disable core dumps'
     umask 077
+
+    typeset -gi _dls_daemon=0
+    typeset -g _dls_logger=''
+    if (( ! o_foreground )); then
+        zmodload zsh/clone || abend 'fatal: daemon mode requires zsh/clone'
+        _dls_logger=$(whence -p logger)
+        [[ $_dls_logger = /* && -x $_dls_logger ]] ||
+            abend 'fatal: daemon mode requires logger'
+    fi
 
     _dls_prepare
 
@@ -517,10 +634,10 @@ function :execute:serve {
     # stops at the door and a program handed an absolute path notices nothing.
     #
     # Anything already here is garbage by definition. Only one server can own
-    # this socket, and the check above has already refused to start if another
-    # one does, so nothing under this root belongs to a living request. Wiping
-    # it is therefore the entire lifecycle at this end — no sweeper, no
-    # liveness test, no pid to reason about.
+    # this socket, and the check above refuses a second live owner. Command
+    # trees admitted by a stopped owner may still run, but a new start cleans
+    # their old scratch too; request files do not survive a broker restart.
+    # There is no sweeper or attempt to track those independent command trees.
     #
     # The wipe raises the mode first because removing the contents means
     # enumerating them, which is the one thing the mode forbids. That is the
@@ -541,48 +658,65 @@ function :execute:serve {
         abend 'fatal: unable to listen on %s' $_dls_socket_path
     _dls_listen=$REPLY
 
-    # A dead client must not take the server with it.
+    typeset -gi _dls_owner=$sysparams[pid]
+    typeset -ga zshexit_functions
+    zshexit_functions+=( _dls_owner_exit )
+
+    # Signals request shutdown; they must not release the path while a token
+    # update or admission hook is still publishing its synchronous work.
     trap '' PIPE
-    trap '_dls_running=0' INT TERM
+    trap '_dls_running=0' INT TERM HUP
 
-    _dls_commands
-    print -r -- "dls: serving on $_dls_socket_path"
-    print -r -- "dls: commands: ${${(j:, :)reply}:-(none)}"
-    print -r -- "dls: sources: ${#_dls_checksums} files loaded; code edits require a restart"
+    if (( ! o_foreground )); then
+        if ! clone /dev/null; then
+            _dls_release
+            return 1
+        fi
+        if (( $! )); then
+            # clone is not a job we can wait for. Give up the listener copy,
+            # then prove readiness and cancellation through the socket itself.
+            exec {_dls_listen}>&-
+            _dls_listen=-1
+            if _dls_start_control ping 1; then
+                _dls_summary
+                return 0
+            fi
+            print -r -u 2 -- 'dls: startup did not complete; stopping server'
+            _dls_start_control stop 0 ||
+                print -r -u 2 -- 'dls: unable to confirm startup cancellation'
+            return 1
+        fi
+        _dls_owner=$sysparams[pid]
+        _dls_daemon=1
+    else
+        _dls_summary
+    fi
 
-    integer conn
+    integer conn selected failed=0
     while (( _dls_running )); do
-        # Do not park forever in accept: traps run while zsocket is blocked,
-        # but the loop cannot observe the cleared run flag until accept
-        # returns. A one-second readiness timeout bounds signal shutdown while
-        # keeping an idle server asleep almost all of the time. Recheck after a
-        # readable result as well, so a signal in that seam never enters an
-        # accept the server has already been told to abandon.
-        #
-        # A readable listener cannot hand back a blocking accept here: a Unix
-        # domain accept queue only shrinks by accept, so a client that connects
-        # and closes before we get to it is still dequeued, and the request read
-        # below finds its immediate end of file within its own five second
-        # bound. The folklore about select promising a read that then blocks is
-        # about reset handling on network stacks and does not reach this socket.
-        #
-        # Two parks remain by design and are not this loop's to fix. Secret
-        # resolution runs in the parent, so a biometric prompt defers shutdown
-        # for as long as `op` takes, deliberately. And a client that dies before
-        # opening its fifos wedges a disowned reply subshell, which is off the
-        # loop and disposable. Neither holds the accept.
-        zselect -r -t 100 $_dls_listen || continue
+        _dls_select $_dls_listen
+        selected=$?
         (( _dls_running )) || break
-        zsocket -a $_dls_listen || continue
+        (( selected == 1 )) && continue
+        if (( selected != 0 )); then
+            _dls_fault 'dls: listener selection failed'
+            failed=1
+            break
+        fi
+        if ! zsocket -a $_dls_listen 2>/dev/null; then
+            _dls_fault 'dls: unable to accept connection'
+            failed=1
+            break
+        fi
         conn=$REPLY
         {
             _dls_handle $conn
         } always {
-            exec {conn}>&- 2>/dev/null
+            { exec {conn}>&- } 2>/dev/null
         }
     done
 
-    exec {_dls_listen}>&- 2>/dev/null
-    rm -f $_dls_socket_path
-    print -r -- 'dls: stopped'
+    _dls_release || failed=1
+    (( _dls_daemon || failed )) || print -r -- 'dls: stopped'
+    return $failed
 }
