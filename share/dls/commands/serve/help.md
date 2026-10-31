@@ -113,6 +113,13 @@ fails: a live server with a full accept queue can produce the same refusal.
 Verify that no server owns it before removing that exact pathname manually and
 starting again.
 
+On macOS, `/usr/sbin/netstat -an -f unix` shows the kernel's Unix-socket table.
+A listed pathname identifies a live socket and can remain listed after unlink.
+Check the pathname used at startup and account for symlink aliases: an empty
+match for another spelling does not prove an orphan. A failed inspection is
+also inconclusive. `/usr/sbin/lsof -n -U` can help identify the holding process;
+heed any warning that its output is incomplete.
+
 Stopping the server leaves command process trees already in flight to finish.
 A newly started server cleans the shared files root before listening, so an old
 in-flight command cannot rely on a request-scoped file path surviving an
