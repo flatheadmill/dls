@@ -107,8 +107,11 @@ size are not brokered.
 A successful `dls stop` means the owner has unlinked the socket while still
 holding its listener, then closed it. TERM and HUP request orderly shutdown;
 foreground INT does too. Synchronous token publication or admission completes
-before release. There is no final token flush. SIGKILL can leave a stale socket,
-which the next attended startup removes after confirming no listener exists.
+before release. There is no final token flush. SIGKILL can leave an orphaned
+socket. Startup leaves an existing socket untouched even when its connection
+fails: a live server with a full accept queue can produce the same refusal.
+Verify that no server owns it before removing that exact pathname manually and
+starting again.
 
 Stopping the server leaves command process trees already in flight to finish.
 A newly started server cleans the shared files root before listening, so an old

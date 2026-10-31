@@ -199,7 +199,7 @@ dls: serving on /Users/example/.local/state/dls/dls.socket
 
 After startup approval and decryption, `dls serve` leaves the loaded broker running in the background. It returns the prompt only after the child answers a control ping. Closing the terminal does not stop it. Use `dls serve --foreground` to keep the accept loop attached for diagnosis or external supervision. Daemon mode requires `zsh/clone` and `logger`, checked before the ceremony; foreground mode does not. There is no automatic startup or restart.
 
-`dls stop` returns success after the owner releases its socket, so an immediate restart can bind safely. TERM and HUP also request orderly shutdown after any synchronous token update or admission finishes. Already admitted commands continue independently. A crash can leave a stale socket, which the next attended startup checks and removes. There is no shutdown flush of a failed token publication.
+`dls stop` returns success after the owner releases its socket, so an immediate restart can bind safely. TERM and HUP also request orderly shutdown after any synchronous token update or admission finishes. Already admitted commands continue independently. A crash can leave an orphaned socket. Startup refuses an existing socket whose connection fails and leaves its pathname untouched: a live server with a full accept queue can produce the same refusal. Verify that no server owns the socket before removing that exact pathname manually and starting again. There is no shutdown flush of a failed token publication.
 
 Daemon faults produce fixed framework messages in the system log under tag `dls`, priority `user.err`; request details, provider diagnostics, and command output are excluded. Foreground diagnostics stay on stderr, and command stdout, stderr, and status return to the client in either mode. Live-provider authorization may occur during a later request: a detached server cannot satisfy a terminal-only prompt.
 
@@ -246,7 +246,7 @@ Stop ends the parent cache and admission of new requests while allowing existing
 
 If a key is lost, reset, or replaced, provision another key outside DLS, review and change the pinned fingerprint, and run full sync. A new pin cannot load the old-key artifact or use it for focused sync. A failed sync preserves that old ciphertext; either finish replenishment under the new key or deliberately restore the old configuration. There is no private-key recovery or snapshot history to manage in DLS: 1Password remains the source of truth.
 
-This is an attended workstation workflow. Background startup, daemonization, a restart command, and remote agent forwarding are outside this interface.
+This is an attended workstation workflow. Automatic startup, automatic restart, a restart command, and remote agent forwarding are outside this interface.
 
 ## Application lifecycle commands
 

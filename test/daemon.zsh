@@ -145,6 +145,33 @@ function :dls:probe {
             assert process.wait(timeout=5) == 0
         config.write_text('')
 
+        # Darwin reports ECONNREFUSED for a live, full backlog as well as an
+        # orphaned pathname. A slow admission or human prompt can hold this
+        # state indefinitely; startup must never unlink on that evidence.
+        if sys.platform == 'darwin':
+            with socket.socket(socket.AF_UNIX) as busy:
+                busy.bind(str(address))
+                busy.listen(1)
+                before = address.stat().st_ino
+                with socket.socket(socket.AF_UNIX) as queued:
+                    queued.connect(str(address))
+                    with socket.socket(socket.AF_UNIX) as refused:
+                        assert refused.connect_ex(str(address)) == errno.ECONNREFUSED
+                    result = subprocess.run([*command, 'serve'], env=env, cwd=fixture,
+                                            capture_output=True, timeout=12)
+                    unchanged = address.exists() and address.stat().st_ino == before
+                    if result.returncode == 0:
+                        # Track and stop an erroneous replacement even when the
+                        # assertion below fails against the old implementation.
+                        owner()
+                        stop()
+                    assert result.returncode == 69 and unchanged, (
+                        'startup replaced a live listener with a full backlog',
+                        result.returncode, result.stdout, result.stderr)
+                    assert b'server may be busy or socket may be orphaned' in result.stderr
+                    assert not (fixture / 'provider.log').exists()
+            address.unlink(missing_ok=True)
+
         for foreground in (True, False):
             logs.write_text('')
             process, pid = launch(foreground)
@@ -206,6 +233,8 @@ function :dls:probe {
         assert address.exists()
         assert logs.read_text() == '-t dls -p user.err -- dls: unable to release server socket\n'
         (tools / 'rm').unlink()
+        run('serve', code=69)
+        address.unlink()
         launch()
         stop()
 
@@ -227,7 +256,7 @@ function :dls:probe {
             wait_for(lambda: bool(logs.read_text()))
             assert logs.read_text() == f'-t dls -p user.err -- {message}\n', (action, logs.read_text())
 
-        # HUP/TERM are orderly; SIGKILL leaves a grounded stale socket.
+        # HUP/TERM are orderly; an orphan after SIGKILL needs operator cleanup.
         for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGKILL):
             logs.write_text('')
             _, pid = launch()
@@ -236,13 +265,18 @@ function :dls:probe {
                 wait_for(lambda: subprocess.run(['ps', '-p', str(pid), '-o', 'stat='],
                          capture_output=True).stdout.strip() in (b'', b'Z'))
                 assert address.exists()
-                # A select capture already in flight may retain the listener
-                # briefly. Establish a refused connection before calling the
-                # pathname stale, just as startup does.
+                # We know this fixture owner has died. Let any in-flight
+                # select capture release its copy, then exercise the ambiguous
+                # refusal path and explicit operator removal.
                 def refused():
                     with socket.socket(socket.AF_UNIX) as connection:
                         return connection.connect_ex(str(address)) == errno.ECONNREFUSED
                 wait_for(refused)
+                before = address.stat().st_ino
+                result = run('serve', code=69)
+                assert b'server may be busy or socket may be orphaned' in result.stderr
+                assert address.stat().st_ino == before
+                address.unlink()
             else:
                 wait_for(lambda: not address.exists())
             assert not logs.read_text()

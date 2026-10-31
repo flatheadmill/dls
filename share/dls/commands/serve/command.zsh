@@ -472,10 +472,9 @@ function _dls_fault {
     fi
 }
 
-# Unlink while still listening: closing first would let another startup replace
-# the stale socket before our unlink. The descriptor sentinel makes every later
-# cleanup harmless. Even a failed unlink closes admission, but never earns a
-# successful stop acknowledgement.
+# Unlink while still listening, then release the descriptor. The sentinel keeps
+# any later cleanup from unlinking a replacement owner's pathname. Even a failed
+# unlink closes admission, but never earns a successful stop acknowledgement.
 function _dls_release {
     (( sysparams[pid] == _dls_owner && _dls_listen >= 0 )) || return 0
     _dls_running=0
@@ -608,8 +607,11 @@ function :execute:serve {
             exec {REPLY}>&-
             abend -c 69 'fatal: already running: another dls server owns %s' $_dls_socket_path
         fi
-        # Stale socket from an unclean exit; nobody is listening.
-        rm -f $_dls_socket_path
+        # A full accept queue can refuse connections too, including while the
+        # owner waits for a human or finishes synchronous admission. Refusal
+        # cannot establish staleness, so leave recovery to the operator.
+        abend -c 69 'fatal: cannot connect to existing socket %s; server may be busy or socket may be orphaned; verify no server owns it before removing it' \
+            "$_dls_socket_path"
     fi
 
     if [[ $_dls_source = snapshot ]]; then
