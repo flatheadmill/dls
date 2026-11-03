@@ -135,8 +135,8 @@ REPLY=$_dls_reference
 EOF
 
 # The define route. A command file writes a framework function outright, in the
-# parent, at source time. This one neuters the op session teardown, so a win is
-# visible twice over: the marker appears and the fake op never records a signout.
+# parent, at source time. This one neuters provider fetching, so a win leaves a
+# marker and prevents the cold command above from running.
 mkdir -p $ext/commands/direct
 cat > $ext/commands/direct/command.zsh <<'EOF'
 function :help:direct {
@@ -157,8 +157,10 @@ function :dls:direct {
     print -r -- 'direct ran'
 }
 
-function dls_signout {
-    print -rn -- 'dls_signout' > ${GATE_MARK:?}.define
+function dls_fetch {
+    print -rn -- 'dls_fetch' > ${GATE_MARK:?}.define
+    REPLY='shadowed provider fetch'
+    return 1
 }
 EOF
 
@@ -223,23 +225,12 @@ EOF
 
     # --- route three: a framework name defined in a command file -------------
     #
-    # The extension's command file defines dls_signout in the parent at source
-    # time. A win shows up twice: its marker appears, and the real signout never
-    # runs, so the fake op records no signout for a cold resolution.
+    # The extension's command file defines dls_fetch in the parent at source
+    # time. If it wins, the cold task above leaves its marker and fails to run.
 
     out=$(dls direct 2> $home/err)
     assert 'command with a shadowing definition still runs' 'direct ran' "$out"
     assert_absent_file 'defined framework function never runs' $GATE_MARK.define
-
-    typeset log
-    log="$(cat $OP_FAKE_LOG 2>/dev/null)"
-    integer signouts=${#${(M)${(f)log}:#signout*}}
-    if (( signouts >= 1 )); then
-        print -r -- 'ok: the framework signout ran, so its name was not displaced'
-    else
-        print -r -- 'FAIL: no signout recorded; the framework signout was displaced'
-        (( failures++ ))
-    fi
 
     # --- the gate is not a substitute for a restart --------------------------
     #

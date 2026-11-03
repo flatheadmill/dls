@@ -191,10 +191,8 @@ function _dls_run_execute {
 # configuration key names only the entry in `$secret`.
 function _dls_resolve_secrets {
     typeset _dls_name=$1 _dls_entry _dls_command _dls_key _dls_reference
-    typeset _dls_account
     typeset _dls_failure=''
     typeset -A _dls_references=() _dls_shapes=() _dls_materialized=()
-    typeset -aU _dls_attempted_accounts=()
     integer _dls_failed=0 _dls_fetch_status=0
 
     # Parse on the rightmost colon: command names may themselves contain
@@ -224,29 +222,22 @@ function _dls_resolve_secrets {
         _dls_shapes[${_dls_key}]=file
     done
 
-    # All references are now known good. Fetch every cold value through its
-    # named account, then sign out each account contacted by the batch once.
-    # Warm-only calls never sign out. Do not expose a partial map if any fetch
-    # fails.
-    {
-        for _dls_key in ${(ok)_dls_references}; do
-            _dls_reference=${_dls_references[${_dls_key}]}
-            if _dls_cache_require "$_dls_reference"; then
-                continue
-            else
-                _dls_fetch_status=$?
-                typeset _dls_table=dls_secrets
-                [[ ${_dls_shapes[${_dls_key}]} = file ]] && _dls_table=dls_files
-                _dls_failure="dls: unable to resolve secret reference $_dls_reference for ${_dls_table}[${_dls_name}:${_dls_key}]: ${${REPLY:-unknown error}#dls: }"
-                _dls_failed=1
-                break
-            fi
-        done
-    } always {
-        for _dls_account in "${(@)_dls_attempted_accounts}"; do
-            dls_signout $_dls_account
-        done
-    }
+    # All references are now known good. Fetch every cold value without
+    # changing the operator's 1Password session. Do not expose a partial map if
+    # any fetch fails.
+    for _dls_key in ${(ok)_dls_references}; do
+        _dls_reference=${_dls_references[${_dls_key}]}
+        if _dls_cache_require "$_dls_reference"; then
+            continue
+        else
+            _dls_fetch_status=$?
+            typeset _dls_table=dls_secrets
+            [[ ${_dls_shapes[${_dls_key}]} = file ]] && _dls_table=dls_files
+            _dls_failure="dls: unable to resolve secret reference $_dls_reference for ${_dls_table}[${_dls_name}:${_dls_key}]: ${${REPLY:-unknown error}#dls: }"
+            _dls_failed=1
+            break
+        fi
+    done
     if (( _dls_failed )); then
         (( _dls_fetch_status != 70 )) || abend 'fatal: %s' "$_dls_failure"
         REPLY=$_dls_failure

@@ -141,8 +141,7 @@ try:
     calls = (fixture / 'op.log').read_text().splitlines()
     reads = [line for line in calls if line.startswith('read ')]
     signouts = [line for line in calls if line.startswith('signout ')]
-    accounts = sorted({line.split('--account ', 1)[1].split()[0] for line in reads})
-    assert signouts == [f'signout --account {account}' for account in accounts], (context, calls)
+    assert not signouts, (context, calls)
     assert len(reads) == (1 if stage == 'read' else 5), (context, calls)
     if stage == 'read':
         assert not (fixture / 'gpg.log').read_text(), (context, 'GPG called after cancellation')
@@ -392,7 +391,7 @@ EOF
     check test -s $snapshot
     log=$(<$fixture/op.log)
     check test ${#${(M)${(f)log}:#read *}} -eq 5
-    check test ${#${(M)${(f)log}:#signout *}} -eq 2
+    check test ${#${(M)${(f)log}:#signout *}} -eq 0
     log=$(<$fixture/gpg.log)
     check test ${#${(M)${(f)log}:#*--decrypt*}} -eq 0
     typeset -A info
@@ -446,8 +445,9 @@ EOF
 'dls: reading 1/1 A/Vault/item/token'$'\n'\
 'dls: encrypting complete snapshot with 5 references'
     log=$(<$fixture/op.log)
-    check test ${#${(M)${(f)log}:#read *}} -eq 1
-    check test ${#${(M)${(f)log}:#signout *}} -eq 1
+    typeset -a focused_calls=( "${(@f)log}" )
+    check test ${#${(M)focused_calls:#read *}} -eq 1
+    check test ${#${(M)focused_calls:#signout *}} -eq 0
     log=$(<$fixture/gpg.log)
     check test ${#${(M)${(f)log}:#*--decrypt*}} -eq 1
     check test ${#${(M)${(f)log}:#*--encrypt*}} -eq 1
@@ -501,7 +501,7 @@ EOF
     check test $? -ne 0
     check test "$before" = "$(cksum $snapshot)"
     log=$(<$fixture/op.log)
-    check test ${#${(M)${(f)log}:#signout *}} -eq 1
+    check test ${#${(M)${(f)log}:#signout *}} -eq 0
     rm $fixture/encode-fail
     check test ${#${(f)"$(find ${snapshot:h} -name '.dls-snapshot.*')"}} -eq 0
 

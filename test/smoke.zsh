@@ -3,8 +3,8 @@
 # Smoke test for the dls wire protocol and control plane. Exercises
 # everything that does not require a 1Password fingerprint: the streams,
 # exit code propagation, command refusal, removed controls,
-# status and stop. The op read path and the signout re-prompt must be
-# verified by a human with a finger.
+# status and stop. The op read authorization path must be verified by a human
+# with a finger.
 #
 # The test runs against an isolated HOME so it can inject a test command as
 # a real zshctl extension and cannot see the operator's configuration.

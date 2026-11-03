@@ -47,8 +47,8 @@ Provider semantics and renewal decisions belong to the extension. Both broad
 token maps are removed before the ordinary command body runs.
 
 Without enrollment, `dls[source]` defaults to `op`. Live mode fetches cold
-references from 1Password, encodes them directly into canonical single-line
-base64, and signs out each account contacted by that batch. Artifact presence
+references from 1Password and encodes them directly into canonical single-line
+base64 without changing the operator's 1Password session. Artifact presence
 never selects the source. Both sources fill the same canonical cache; every
 content exit passes through the existing decoder into a value or request file.
 Delivery shape remains a request concern.

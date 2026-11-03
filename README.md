@@ -186,7 +186,7 @@ dls: wrote complete snapshot: /Users/example/.local/state/dls/snapshot.gpg
 dls: a running server keeps its loaded values until stopped and started again
 ```
 
-With no arguments, sync reads every distinct reference declared in either `dls_secrets` or `dls_files`. Each contacted account is signed out after the attempted batch. Full sync encrypts with the public key and needs no Nitrokey operation. A failed read, validation, encryption, or replacement leaves the previous ciphertext in place.
+With no arguments, sync reads every distinct reference declared in either `dls_secrets` or `dls_files`. DLS leaves the operator's 1Password session unchanged. Full sync encrypts with the public key and needs no Nitrokey operation. A failed read, validation, encryption, or replacement leaves the previous ciphertext in place.
 
 Start the reviewed server in the foreground, outside the agent's sandbox:
 
@@ -203,7 +203,7 @@ Sync and serve approve separate secret-handling sessions. Sync reviews and loads
 
 The default socket is `$XDG_RUNTIME_DIR/dls.socket` when that variable is set, otherwise `~/.local/state/dls/dls.socket`. `DLS_SOCKET` overrides it for one invocation, and `dls[socket]` provides a persistent override. Server and client must resolve the same socket.
 
-An installation without `dls[source]` defaults to `op`. To select live fetching explicitly, set `dls[source]=op`. File presence never selects a source. In live mode the first cold operation may require authorization for each account it uses; subsequent requests reuse the cached entries. Each account contacted by a cold batch is signed out. This alternate source uses the same request admission and delivery path.
+An installation without `dls[source]` defaults to `op`. To select live fetching explicitly, set `dls[source]=op`. File presence never selects a source. In live mode the first cold operation may require authorization for each account it uses; subsequent requests reuse the cached entries. DLS leaves the operator's 1Password session unchanged. This alternate source uses the same request admission and delivery path.
 
 Commands receive `/dev/null` as standard input by default. `dls --stdin <command> ...` instead forwards the client's standard input as a byte stream; it does not provide a terminal, so programs that require terminal modes or screen control remain outside the interface. Commands run in the client's current working directory when that directory is available to the server.
 

@@ -2,7 +2,7 @@
 
 # Success-path companion to smoke.zsh: fake op on PATH, two secrets on one
 # command, driven through the full wire. Verifies map population, one-session
-# batching, warm-call signout suppression, masking, and non-export.
+# batching, provider-session preservation, masking, and non-export.
 
 emulate -L zsh
 
@@ -39,8 +39,8 @@ function assert_absent {
     fi
 }
 
-# The fake op logs every invocation, serves the test references, and accepts
-# signout. It is the successful 1Password boundary this test controls.
+# The fake op logs every invocation and serves the test references. It is the
+# successful 1Password boundary this test controls.
 mkdir -p $home/bin
 cat > $home/bin/op <<'EOF'
 #!/usr/bin/env zsh
@@ -168,8 +168,8 @@ integer server=0
     typeset out log
     float started elapsed
 
-    # Cold: two reads across two accounts, one signout per account, populated
-    # map, masked raw output.
+    # Cold: two reads across two accounts, no session mutation, populated map,
+    # and masked raw output.
     started=$EPOCHREALTIME
     out=$(dls test-secret 2> $home/err)
     elapsed=$(( EPOCHREALTIME - started ))
@@ -190,13 +190,11 @@ integer server=0
     log="$(<$OP_FAKE_LOG)"
     integer reads=${#${(M)${(f)log}:#read*}} signouts=${#${(M)${(f)log}:#signout*}}
     assert 'cold call reads twice' 2 $reads
-    assert 'cold call signs out each account' 2 $signouts
+    assert 'cold call does not sign out' 0 $signouts
     assert 'first read selects its account' \
         'read --account First --no-newline -- op://Vault/item/shared' "$log"
     assert 'second read selects its account' \
         'read --account Second --no-newline -- op://Vault/item/beta' "$log"
-    assert 'first account is signed out' 'signout --account First' "$log"
-    assert 'second account is signed out' 'signout --account Second' "$log"
 
     # Warm: no additional op contact, same populated map.
     out=$(dls test-secret 2> $home/err)
@@ -205,7 +203,7 @@ integer server=0
     signouts=${#${(M)${(f)log}:#signout*}}
     assert 'warm call still populates' 'alpha-rev: YRANAC' "$out"
     assert 'warm call adds no reads' 2 $reads
-    assert 'warm call adds no signout' 2 $signouts
+    assert 'warm call does not sign out' 0 $signouts
 
     out=$(dls test-other 2> $home/err)
     assert 'second command receives its secret' 'gamma-len: 16' "$out"

@@ -13,7 +13,7 @@ read. Shell completion offers the declared references without fetching values.
 Full sync needs the configured public encryption key. Focused sync additionally
 needs its private-key operation: on an enrolled Nitrokey, the PIN and touch.
 A missing, invalid, or declaration-incompatible snapshot requires a full sync.
-Each 1Password account contacted is signed out after the attempted batch.
+DLS leaves the operator's 1Password session unchanged.
 
 Set `dls[recipient]` to the full fingerprint of the actual encryption key or
 subkey. `dls[snapshot]` optionally overrides `~/.local/state/dls/snapshot.gpg`;
